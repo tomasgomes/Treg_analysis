@@ -1,0 +1,1765 @@
+---
+title: "10X Full Analysis"
+output: html_notebook
+---
+
+
+# Setup
+## Run once - prepare the data (avoid DLL issues)
+Load libraries
+
+```{r}
+library(scater)
+library(Seurat)
+```
+
+
+
+Load data - use scater to get ENSEMBL IDs
+
+```{r}
+dirs_treg = paste0(list.dirs("../alignments", recursive = F), "/outs/filtered_gene_bc_matrices/mm10")
+dirs_treg = dirs_treg[grepl("3324", dirs_treg)]
+exprs_list = lapply(dirs_treg, function(x) scater::read10xResults(x))
+names(exprs_list) = list.dirs("../alignments", 
+                              recursive = F, full.names = F)[grepl("3324", 
+                                                                   list.dirs("../alignments", recursive = F, full.names = F))]
+
+seurat_list = lapply(names(exprs_list), function(x) Seurat::CreateSeuratObject(counts(exprs_list[[x]]), project = x))
+names(seurat_list) = names(exprs_list)
+all_data = Seurat::MergeSeurat(seurat_list$`3324STDY7421492`, seurat_list$`3324STDY7421493`, project = "Treg_10X", 
+                               do.normalize = F, add.cell.id1 = "3324STDY7421492", add.cell.id2 = "3324STDY7421493")
+for(n in names(seurat_list)[3:length(seurat_list)]){
+  if(n==names(seurat_list)[length(seurat_list)]){
+    all_data = Seurat::MergeSeurat(all_data, seurat_list[[n]], project = "Treg_10X", 
+                                   do.normalize = F, add.cell.id2 = n, min.cells = 10)
+  } else{
+    all_data = Seurat::MergeSeurat(all_data, seurat_list[[n]], project = "Treg_10X", 
+                                 do.normalize = F, add.cell.id2 = n)
+  }
+}
+save(all_data, file = "./saved_data/10X/10X_all_data_preQC.RData")
+```
+
+
+
+## Actual Setup
+Load libraries
+
+```{r}
+library(Seurat)
+library(ggplot2)
+library(switchde)
+
+source("/nfs/team205/tpcg/bin/scripts/usefulFunctions.R")
+```
+
+
+
+Load data
+
+```{r}
+sample_info = read.table(text = "SANGER SAMPLE ID\tSUPPLIER SAMPLE NAME
+3324STDY7421492\tTreg_spleen
+3324STDY7421493\tTmem_spleen
+3324STDY7421494\tTreg_bLN
+3324STDY7421495\tTmem_bLN
+3324STDY7421496\tTreg_mLN
+3324STDY7421497\tTmem_mLN
+3324STDY7421498\tTreg_colon
+3324STDY7421499\tTmem_colon
+3324STDY7421500\tTreg_skin
+3324STDY7421501\tTmem_skin", sep ="\t", header = T)
+
+gene_names = read.table("../../../10x-runs/ricardo/3324STDY7421492/outs/filtered_gene_bc_matrices/mm10/genes.tsv")
+```
+
+
+
+# Data QC and preparation
+Load data
+
+```{r}
+load("./saved_data/10X/10X_all_data_preQC.RData")
+```
+
+
+
+Do some QC plots
+
+```{r, fig.width=7.6, fig.height=3}
+pdf("./plots/10X/QC/QC_prefiltering.pdf", useDingbats = F, height = 7.1, width = 7.1)
+plot_df = all_data@meta.data
+plot_df = merge(plot_df, sample_info, by.x = 3, by.y = 1)
+colnames(plot_df)[4] = "ct_tiss"
+plot_df$ct_tiss = factor(gsub("_", " ", as.character(plot_df$ct_tiss)), levels = c("Treg spleen",  "Treg mLN",
+                                                                                   "Treg bLN","Treg colon",
+                                                                                   "Treg skin", "Tmem spleen", 
+                                                                                   "Tmem mLN", "Tmem bLN", 
+                                                                                   "Tmem colon", "Tmem skin"))
+
+gene_umi_point = ggplot(plot_df, aes(x = nUMI, y = nGene, fill = orig.ident))+
+  geom_point(alpha = 0.6, shape = 21, colour = "grey50")+
+  geom_hline(yintercept = c(700, 3500), linetype = "dashed", size = 0.5)+
+  geom_vline(xintercept = c(1000, 15000), linetype = "dashed", size = 0.5)+
+  scale_x_continuous(breaks = seq(0, 30000, 2500))+
+  theme_classic()+
+  theme(axis.text.x = element_text(angle = 30, hjust = 1, vjust = 1, colour = "black"), 
+        axis.text.y = element_text(colour = "black"), 
+        legend.key.size = unit(0.4, "cm"),
+        aspect.ratio = 1)
+print(gene_umi_point)
+
+gene_umi_hex = ggplot(plot_df, aes(x = nUMI, y = nGene))+
+  geom_hex(bins = 50)+
+  geom_hline(yintercept = c(700, 3500), linetype = "dashed", size = 0.5)+
+  geom_vline(xintercept = c(1000, 15000), linetype = "dashed", size = 0.5)+
+  scale_x_continuous(breaks = seq(0, 30000, 2500))+
+  theme_classic()+
+  theme(axis.text.x = element_text(angle = 30, hjust = 1, vjust = 1, colour = "black"), 
+        axis.text.y = element_text(colour = "black"), 
+        legend.key.size = unit(0.4, "cm"),
+        aspect.ratio = 1)
+print(gene_umi_hex)
+
+plot_df = reshape2::melt(plot_df)
+
+violin_gene_umi = ggplot(plot_df, aes(x = orig.ident, y = value, fill = orig.ident))+
+  facet_wrap(~variable, ncol = 3, scales = "free")+
+  geom_violin()+
+  guides(fill = guide_legend(nrow = 3))+
+  theme_classic()+
+  theme(axis.text.x = element_blank(), 
+        legend.key.size = unit(0.4, "cm"),
+        legend.position = "bottom")
+print(violin_gene_umi)
+
+gene_umi_hex_sample = ggplot(plot_df, aes(x = nUMI, y = nGene))+
+  facet_wrap(~ct_tiss, ncol = 5)+
+  geom_hex(bins = 50)+
+  geom_hline(yintercept = c(700, 3500), linetype = "dashed", size = 0.4)+
+  geom_vline(xintercept = c(1000, 15000), linetype = "dashed", size = 0.4)+
+  scale_x_continuous(breaks = seq(0, 30000, 5000), limits = c(0, 30000))+
+  scale_fill_viridis_c(option = "plasma")+
+  theme_classic()+
+  theme(axis.text.x = element_text(angle = 33, hjust = 1, vjust = 1, 
+                                   colour = "black", size = 4.7), 
+        axis.text.y = element_text(colour = "black", size = 4.7), 
+        axis.title = element_text(size = 5.5, face = "bold"),
+        strip.text = element_text(size = 5.5, face = "bold"),
+        legend.key.size = unit(0.3, "cm"),
+        legend.text = element_text(size = 4.7),
+        legend.title = element_text(size = 5.5),
+        aspect.ratio = 1)
+print(gene_umi_hex_sample)
+
+dev.off()
+save(gene_umi_hex_sample, file = "FINAL_PLOTS/plot_repository/qc_10X_all.RData")
+```
+
+
+
+Filter
+
+```{r}
+all_data = Seurat::FilterCells(all_data, subset.names = c("nGene", "nUMI"), 
+                               low.thresholds = c(700, 1000), 
+                               high.thresholds = c(3500, 15000))
+```
+
+
+
+Normalize
+
+```{r}
+all_data <- NormalizeData(object = all_data, normalization.method = "LogNormalize", 
+                          scale.factor = 10000, display.progress = F)
+```
+
+
+
+Get HVG, add more metadata
+
+```{r}
+pdf("./plots/10X/QC/HVG_plot.pdf", useDingbats = F, height = 7.1, width = 7.1)
+all_data = Seurat::FindVariableGenes(all_data, display.progress = F, num.bin = 100, binning.method = "equal_frequency")
+dev.off()
+
+cell_type_sort = data.frame(row.names = rownames(all_data@meta.data),
+                            cell_type_sort = sample_info[match(all_data@meta.data$orig.ident, sample_info$SANGER.SAMPLE.ID), 2])
+all_data = Seurat::AddMetaData(all_data, metadata = cell_type_sort, cell_type_sort)
+```
+
+
+
+Run PCA (and do scale before)
+
+```{r}
+all_data <- Seurat::ScaleData(object = all_data, model.use = "negbinom", do.center = T, do.scale = F, use.umi = T)
+all_data = Seurat::RunPCA(all_data, pcs.compute = 50, pcs.print = 1:3, genes.print = 10, pc.genes = rownames(all_data@data))
+```
+
+
+
+Plot PCA
+
+```{r}
+plot_df = cbind(all_data@meta.data, all_data@dr$pca@cell.embeddings)
+
+pdf("./plots/10X/QC/PCA_plots.pdf", useDingbats = F, height = 7.1, width = 7.1)
+pca_plot = ggplot(plot_df, aes(x = PC1, y = PC2, colour = cell_type_sort))+
+  geom_point(alpha = 0.77, pch = 19, size = 0.88)+
+  theme_classic()+
+  theme(aspect.ratio = 1)
+print(pca_plot)
+
+# Elbow Plot - use 30 PCs (but we might still need to filter cells after individual clustering)
+elbow_plot = PCElbowPlot(object = all_data, num.pc = 50)
+print(elbow_plot)
+dev.off()
+```
+
+
+
+Run tSNE
+
+```{r}
+all_data = Seurat::RunTSNE(all_data, dims.use = 1:30, seed.use = 1)
+save(all_data, file = "./saved_data/10X/10X_all_data.RData")
+```
+
+
+
+Plot tSNE
+
+```{r}
+plot_df = cbind(all_data@meta.data, all_data@dr$tsne@cell.embeddings)
+
+pdf("./plots/10X/QC/tSNE_plots.pdf", useDingbats = F, height = 7.1, width = 7.1)
+pca_plot = ggplot(plot_df, aes(x = tSNE_1, y = tSNE_2, colour = cell_type_sort))+
+  geom_point(alpha = 0.77, pch = 19, size = 0.88)+
+  theme_classic()+
+  theme(aspect.ratio = 1)
+print(pca_plot)
+dev.off()
+```
+
+
+
+# Clustering
+## All Samples
+Load data
+
+```{r}
+load("./saved_data/10X/10X_all_data.RData")
+```
+
+
+Clustering
+
+```{r}
+all_data <- Seurat::FindClusters(object = all_data, reduction.type = "pca", 
+                                 dims.use = 1:30, 
+                                 resolution = seq(0.1, 1.2, 0.1), 
+                                 print.output = 0, save.SNN = TRUE, 
+                                 force.recalc = T)
+```
+
+
+
+Look at clusters
+
+```{r}
+pdf("./plots/10X/clustering/All_populations_clustering_tsne.pdf", useDingbats = F)
+tsne_list = list()
+for(i in c(5:16)){
+  resolution = colnames(all_data@meta.data)[i]
+  tsne_list[[resolution]] = Seurat::TSNEPlot(all_data, do.label = T,
+                                             group.by = resolution, vector.friendly = T,
+                                             label.size = 14, no.legend = T,
+                                             do.return = T, pt.size = 3)+
+    ggtitle(resolution)+
+    theme(aspect.ratio = 1)
+  print(tsne_list[[resolution]])
+}
+dev.off()
+```
+
+
+
+Add annotated labels and save data
+
+```{r}
+all_data@meta.data$cl_allCells = factor(all_data@meta.data$res.0.2, levels = as.character(0:7))
+levels(all_data@meta.data$cl_allCells) = c("LT_Treg", "LT_Tmem", "Colon_Tmem", "Colon_Treg", "NKT", 
+                                           "Skin", "MitoStress", "Undefined")
+
+save(all_data, file = "./saved_data/10X/10X_all_data.RData")
+```
+
+
+
+## Each sample - this might be used to clean the data from unwanted cell types (NKT cells or others)
+### Preparation
+Load data and filter unwanted populations
+
+```{r}
+load("./saved_data/10X/10X_all_data.RData")
+
+cells = rownames(all_data@meta.data)[!all_data@meta.data$cl_allCells %in% c("NKT", "MitoStress", "Undefined")]
+all_data = SubsetData(all_data, cells.use = cells)
+```
+
+
+
+Partition data and run PCA
+
+```{r}
+sub_data_list = list()
+for(n in unique(all_data@meta.data$cell_type_sort)){
+  print(n)
+  cells = rownames(all_data@meta.data)[all_data@meta.data$cell_type_sort==n]
+  sub_data_list[[n]] = Seurat::SubsetData(all_data, cells.use = cells, do.center = T, do.scale = F)
+  sub_data_list[[n]] = Seurat::FindVariableGenes(sub_data_list[[n]], display.progress = F)
+  sub_data_list[[n]] <- NormalizeData(object = sub_data_list[[n]], normalization.method = "LogNormalize", 
+                                      scale.factor = 10000, display.progress = F)
+  sub_data_list[[n]] <- Seurat::ScaleData(object = sub_data_list[[n]], model.use = "negbinom", 
+                                          do.center = T, do.scale = F, use.umi = T)
+  sub_data_list[[n]] = Seurat::RunPCA(sub_data_list[[n]], pcs.compute = 30, 
+                                      do.print = F)
+}
+```
+
+
+
+Merge all skin data into one dataset
+
+```{r}
+cells = rownames(all_data@meta.data)[all_data@meta.data$cell_type_sort %in% c("Treg_skin", "Tmem_skin")]
+sub_data_list[["Skin"]] = Seurat::SubsetData(all_data, cells.use = cells, do.center = T, do.scale = F)
+sub_data_list[["Skin"]] = Seurat::FindVariableGenes(sub_data_list[["Skin"]] , display.progress = F)
+sub_data_list[["Skin"]]  <- NormalizeData(object = sub_data_list[["Skin"]] , normalization.method = "LogNormalize", 
+                                          scale.factor = 10000, display.progress = F)
+sub_data_list[["Skin"]]  <- Seurat::ScaleData(object = sub_data_list[["Skin"]] , model.use = "negbinom", 
+                                              do.center = T, do.scale = F, use.umi = T)
+sub_data_list[["Skin"]]  = Seurat::RunPCA(sub_data_list[["Skin"]] , pcs.compute = 30, do.print = F)
+```
+
+
+
+PCA elbow plots and run tSNE
+
+```{r}
+pdf("./plots/10X/clustering/elbow_plots_individual.pdf", useDingbats = F, height = 7.1, width = 7.1)
+for(n in names(sub_data_list)){
+  elbow_plot = PCElbowPlot(object = sub_data_list[[n]], num.pc = 30)+ggtitle(n)
+  print(elbow_plot)
+  sub_data_list[[n]] = Seurat::RunTSNE(sub_data_list[[n]], dims.use = 1:25, seed.use = 1)
+  tsne_plt = DimPlot(sub_data_list[[n]], reduction.use = "tsne", do.return = T)+ggtitle(n)
+  print(tsne_plt)
+}
+dev.off()
+save(sub_data_list, file = "./saved_data/10X/10X_sub_data_list.RData")
+```
+
+
+
+### Clustering
+Run clustering for each partition
+
+```{r}
+for(n in names(sub_data_list)){
+  print(n)
+  sub_data_list[[n]] <- Seurat::FindClusters(object = sub_data_list[[n]],
+                                             reduction.type = "pca", 
+                                             dims.use = 1:25, 
+                                             resolution = seq(0.1, 1.2, 0.1),
+                                             print.output = 0, save.SNN = TRUE)
+}
+save(sub_data_list, file = "./saved_data/10X/10X_sub_data_list.RData")
+```
+
+
+
+Look into clusters
+
+```{r}
+tsne_list_list = list()
+for(n in names(sub_data_list)){
+  tsne_list = list()
+  for(i in c(5:16)){
+    tsne_list[[colnames(sub_data_list[[n]]@meta.data)[i]]] = Seurat::TSNEPlot(sub_data_list[[n]], do.label = T, 
+                                                                      group.by = colnames(sub_data_list[[n]]@meta.data)[i], 
+                                                                      vector.friendly = T, label.size = 14, no.legend = T,
+                                                                      do.return = T, pt.size = 3)+
+      ggtitle(paste(n, colnames(sub_data_list[[n]]@meta.data)[i]))+
+      theme(aspect.ratio = 1)
+  }
+  tsne_list_list[[n]] = tsne_list
+}
+
+pdf("./plots/10X/clustering/tSNE_plots.pdf", useDingbats = F, paper = "a4")
+for(n in names(tsne_list_list)){
+  tsne_list= tsne_list_list[[n]]
+  all_plots = cowplot::plot_grid(plotlist = tsne_list[1:4], ncol = 2, align = "hv")
+  print(all_plots)
+  all_plots = cowplot::plot_grid(plotlist = tsne_list[5:8], ncol = 2, align = "hv")
+  print(all_plots)
+  all_plots = cowplot::plot_grid(plotlist = tsne_list[9:12], ncol = 2, align = "hv")
+  print(all_plots)
+}
+dev.off()
+```
+
+
+
+Save joint data with final subpop information
+
+```{r}
+load("./saved_data/10X/10X_sub_data_list.RData")
+load("./saved_data/10X/10X_all_data.RData")
+
+all_cl_metadata = rbind(sub_data_list$Treg_spleen@meta.data,
+                        sub_data_list$Tmem_spleen@meta.data,
+                        sub_data_list$Treg_mLN@meta.data,
+                        sub_data_list$Tmem_mLN@meta.data,
+                        sub_data_list$Treg_bLN@meta.data,
+                        sub_data_list$Tmem_bLN@meta.data,
+                        sub_data_list$Treg_colon@meta.data,
+                        sub_data_list$Tmem_colon@meta.data,
+                        sub_data_list$Skin@meta.data)
+#all_cl_metadata$cl_sample = unlist(sapply(names(sub_data_list)[c(1,2,5,6,3,4,7,8,11)], 
+#                                          function(x) rep(x, nrow(sub_data_list[[x]]@meta.data))))
+
+# add cluster annotations
+all_cl_metadata$cl_annot = c(c("Treg_lymphoid","Treg_effector","Treg_NLTlike")[as.numeric(sub_data_list$Treg_spleen@meta.data$res.0.3)+1],
+     c("Tmem_lymphoid","Tmem_Th1","Tmem_activated")[as.numeric(sub_data_list$Tmem_spleen@meta.data$res.0.4)+1],
+     c("Treg_lymphoid","Treg_effector","Treg_NLTlike")[as.numeric(sub_data_list$Treg_mLN@meta.data$res.0.4)+1],
+     c("Tmem_activated","Tmem_lymphoidEgressing","Tmem_lymphoidResident","Tmem_stress",
+       "Tmem_Cxcl10","Tmem_Th17","Tmem_cycling")[as.numeric(sub_data_list$Tmem_mLN@meta.data$res.0.7)+1],
+     c("Treg_lymphoid","Treg_Stat1","Treg_NLTlike", "Treg_effector")[as.numeric(sub_data_list$Treg_bLN@meta.data$res.0.4)+1],
+     c("Tmem_lymphoid","Tmem_Th1","Tmem_activated","Tmem_Th17")[as.numeric(sub_data_list$Tmem_bLN@meta.data$res.0.3)+1],
+     c("Treg_suppressive","Treg_NLT","Treg_LTlike","Treg_stress")[as.numeric(sub_data_list$Treg_colon@meta.data$res.0.5)+1],
+     c("Tmem_Th17","Tmem_Th1","Tmem_stress","Tmem_LTlike","Tmem_stress","Tmem_Th2")[as.numeric(sub_data_list$Tmem_colon@meta.data$res.0.6)+1],
+     c("lowQuality","Tmem_NLT","Treg_NLT")[as.numeric(sub_data_list$Skin@meta.data$res.0.4)+1])
+
+all_data_cl = all_data
+cl_df = data.frame(row.names = rownames(all_cl_metadata),
+                   cl_annot = all_cl_metadata$cl_annot)
+cl_df=merge(all_data_cl@meta.data, cl_df, by = 0, all = T)
+cl_df$cl_annot = as.character(cl_df$cl_annot)
+cl_df$cl_annot[is.na(cl_df$cl_annot)] = as.character(cl_df$cl_allCells)[is.na(cl_df$cl_annot)]
+rownames(cl_df) = cl_df[,1]
+cl_df = cl_df[,-1]
+cl_df$tissue_gen = c("LT", "NLT")[(grepl("colon", cl_df$cell_type_sort) | grepl("skin", cl_df$cell_type_sort))+1]
+cl_df$tissue_sp = ifelse(grepl("skin", cl_df$cell_type_sort), "skin",
+                         ifelse(grepl("colon", cl_df$cell_type_sort), "colon",
+                                ifelse(grepl("bLN", cl_df$cell_type_sort), "bLN",
+                                       ifelse(grepl("mLN", cl_df$cell_type_sort), "mLN", "spleen"))))
+cl_df$cl_tiss = paste0(cl_df$cl_annot, ".in.", cl_df$tissue_sp)
+cl_df$cl_ct = ifelse(grepl("Treg", cl_df$cl_annot), "Treg",
+                     ifelse(grepl("Tmem", cl_df$cl_annot), "Tmem", cl_df$cl_annot))
+all_data_cl@meta.data = cl_df
+
+save(all_data_cl, file = "./saved_data/10X/all_data_cl.RData")
+```
+
+
+
+Make data subset without stress cells
+
+```{r}
+load("./saved_data/10X/10X_sub_data_list.RData")
+load("./saved_data/10X/all_data_cl.RData")
+
+sub_data_noStress_list = list()
+for(n in names(sub_data_list)){
+  if(grepl("_skin", n)) next
+  cond1 = if(n=="Skin"){all_data_cl@meta.data$tissue_sp=="skin"}else{all_data_cl@meta.data$cell_type_sort==n}
+  cells = rownames(all_data_cl@meta.data)[cond1 & 
+                                    !grepl("lowQ", all_data_cl@meta.data$cl_annot) & 
+                                    !grepl("MitoStress", all_data_cl@meta.data$cl_annot) & 
+                                    !grepl("NKT", all_data_cl@meta.data$cl_annot) & 
+                                    !grepl("Undefined", all_data_cl@meta.data$cl_annot) & 
+                                    !grepl("stress", all_data_cl@meta.data$cl_annot)]
+  sub_data_noStress_list[[n]] = SubsetData(sub_data_list[[n]], cells.use = cells)
+  
+  sub_data_noStress_list[[n]] = Seurat::FindVariableGenes(sub_data_noStress_list[[n]], display.progress = F)
+  sub_data_noStress_list[[n]] <- NormalizeData(object = sub_data_noStress_list[[n]], normalization.method = "LogNormalize", 
+                                               scale.factor = 10000, display.progress = F)
+  sub_data_noStress_list[[n]] <- Seurat::ScaleData(object = sub_data_noStress_list[[n]], model.use = "negbinom", 
+                                                   do.center = T, do.scale = F, use.umi = T)
+  sub_data_noStress_list[[n]] = Seurat::RunPCA(sub_data_noStress_list[[n]], 
+                                               pcs.compute = 30, do.print = F)
+  sub_data_noStress_list[[n]] = Seurat::RunTSNE(sub_data_noStress_list[[n]], dims.use = 1:25, seed.use = 1)
+}
+
+save(sub_data_noStress_list, file = "./saved_data/10X/10X_sub_data_noStress_list.RData")
+```
+
+
+
+# Differential Expression
+## All data cluster markers
+Load data
+
+```{r}
+load("saved_data/10X/10X_all_data.RData")
+```
+
+
+
+DE to find markers
+
+```{r}
+all_markers_list = list()
+for(cl in c("res.0.2","res.0.7", "res.1.2")){
+  print(cl)
+  all_data = SetIdent(all_data, ident.use = all_data@meta.data[,cl])
+  all_markers_list[[cl]] = FindAllMarkers(all_data, logfc.threshold = 0.25,
+                                          return.thresh = 0.05,
+                                          min.pct = 0.05, print.bar = T)
+}
+all_markers_list = lapply(all_markers_list, function(x) merge(gene_names, x, by.x = 1, by.y = 7))
+save(all_markers_list, file = "plots/10X/DE/all_markers_list.RData")
+```
+
+
+
+DE 1 vs 1
+
+```{r}
+pairwise_all_markers_list = list()
+for(cl in c("res.0.2","res.0.7", "res.1.2")){
+  print(cl)
+  all_data = SetIdent(all_data, ident.use = all_data@meta.data[,cl])
+  comb_mat = combn(unique(all_data@ident), 2)
+  for(j in 1:ncol(comb_mat)){
+    print(paste(j, "of", ncol(comb_mat)))
+    comp = paste0(comb_mat[1,j], ".vs.", comb_mat[2,j])
+    pairwise_all_markers_list[[paste0(cl, "_", comp)]] = FindMarkers(all_data, comb_mat[1,j],
+                                                    comb_mat[2,j],
+                                                    logfc.threshold = 0.25, 
+                                                    min.pct = 0.05,
+                                                    print.bar = F)
+  }
+}
+pairwise_all_markers_list = lapply(pairwise_all_markers_list, 
+                                   function(x) merge(gene_names, x, 
+                                                     by.x = 1, by.y = 0))
+save(pairwise_all_markers_list, 
+     file = "plots/10X/DE/pairwise_all_markers_list.RData")
+```
+
+
+
+
+
+## Individual cluster markers
+Load data
+
+```{r}
+load("./saved_data/10X/10X_sub_data_list.RData")
+```
+
+
+
+Run DE one-vs-rest for the clusters of relevant partitions
+
+```{r}
+relevant_partitions_list = list(c("res.0.3"),c("res.0.4"),
+                                c("res.0.3","res.0.4","res.0.5","res.0.7"), c("res.0.2","res.0.3","res.0.4","res.0.5","res.0.6"),
+                                c("res.0.4","res.0.5"),c("res.0.3","res.0.4","res.0.7"),
+                                c("res.0.4","res.0.5"),c("res.0.2","res.0.6"),
+                                c("res.0.1"),c("res.0.6","res.1"),
+                                c("res.0.4"))
+names(relevant_partitions_list) = names(sub_data_list)
+
+de_list_subpop = list()
+for(n in names(relevant_partitions_list)){
+  for(cl in relevant_partitions_list[[n]]){
+    print(paste0(n, "_", cl))
+    if(!is.null(cl)){
+      sub_data_list[[n]] = SetIdent(sub_data_list[[n]], 
+                                    ident.use = sub_data_list[[n]]@meta.data[,cl])
+      nn = paste0(n, "_", cl)
+      de_list_subpop[[nn]] = FindAllMarkers(sub_data_list[[n]], logfc.threshold = 0.25, 
+                                            return.thresh = 0.05,
+                                            min.pct = 0.05, print.bar = F)
+    }
+  }
+}
+de_list_subpop = lapply(de_list_subpop, function(x) merge(gene_names, x, 
+                                                          by.x = 1, by.y = 7))
+save(de_list_subpop, file = "./plots/10X/DE/de_list_subpop.RData")
+```
+
+
+
+## DE Clusters
+Load data
+
+```{r}
+load("./saved_data/10X/all_data_cl.RData")
+```
+
+
+
+DE 1 vs 1 all clusters
+
+```{r}
+pairwise_subcl_list = list()
+
+all_data_cl = SetIdent(all_data_cl, ident.use = all_data_cl@meta.data$cl_annot)
+comb_mat = combn(unique(all_data_cl@ident), 2)
+for(j in 1:ncol(comb_mat)){
+  print(paste(j, "of", ncol(comb_mat)))
+  comp = paste0(comb_mat[1,j], ".vs.", comb_mat[2,j])
+  pairwise_subcl_list[[comp]] = FindMarkers(all_data_cl, comb_mat[1,j], comb_mat[2,j],
+                                            logfc.threshold = 0.25, min.pct = 0.05,
+                                            print.bar = F)
+}
+pairwise_subcl_list = lapply(pairwise_subcl_list, 
+                             function(x) merge(gene_names, x, 
+                                               by.x = 1, by.y = 0))
+save(pairwise_subcl_list, 
+     file = "plots/10X/DE/pairwise_subcl_list.RData")
+```
+
+
+
+DE 1 vs 1 all clusters per tissue
+
+```{r}
+pairwise_subcl_tiss_list = list()
+
+all_data_cl = SetIdent(all_data_cl, ident.use = all_data_cl@meta.data$cl_tiss)
+comb_mat = combn(unique(all_data_cl@ident)[grepl("_", unique(all_data_cl@ident), fixed = T)], 2)
+for(j in 1:ncol(comb_mat)){
+  print(paste(j, "of", ncol(comb_mat)))
+  comp = paste0(comb_mat[1,j], ".vs.", comb_mat[2,j])
+  pairwise_subcl_tiss_list[[comp]] = FindMarkers(all_data_cl, comb_mat[1,j],
+                                                 comb_mat[2,j], 
+                                                 logfc.threshold = 0.25, 
+                                                 min.pct = 0.05,
+                                                 print.bar = F)
+}
+pairwise_subcl_tiss_list = lapply(pairwise_subcl_tiss_list, 
+                                  function(x) merge(gene_names, x, 
+                                                    by.x = 1, by.y = 0))
+save(pairwise_subcl_tiss_list, 
+     file = "plots/10X/DE/pairwise_subcl_tiss_list.RData")
+```
+
+
+
+
+## DE Groups
+Load data
+
+```{r}
+load("./saved_data/10X/all_data_cl.RData")
+```
+
+
+
+Define filtered data
+
+```{r}
+cells_filt = rownames(all_data_cl@meta.data)[!all_data_cl@meta.data$cl_annot %in% c("lowQuality", "Treg_stress", "Tmem_stress",
+                                                                                    "NKT", "MitoStress",
+                                                                                    "Undefined", "Tmem_cycling")]
+all_data_cl_filt = Seurat::SubsetData(all_data_cl, cells.use = cells_filt)
+filt_meta = all_data_cl_filt@meta.data
+```
+
+
+
+### General DE
+DE NLT vs LT (USE 1% CELLS HERE)
+
+```{r}
+ct_nlt_lt = list("colon_mLN_spleen" = rownames(filt_meta)[filt_meta$cell_type_sort %in% c("Treg_colon", "Tmem_colon", "Treg_spleen",
+                                                                                          "Tmem_spleen", "Treg_mLN", "Tmem_mLN")],
+                 "skin_bLN_spleen" = rownames(filt_meta)[filt_meta$cell_type_sort %in% c("Treg_skin", "Tmem_skin", "Treg_spleen", 
+                                                                                         "Tmem_spleen", "Treg_bLN", "Tmem_bLN")],
+                 "colon_skin_mLN_bLN_spleen" = rownames(filt_meta),
+                 "colon_mLN" = rownames(filt_meta)[filt_meta$cell_type_sort %in% c("Treg_colon", "Tmem_colon", 
+                                                                                   "Treg_mLN", "Tmem_mLN")],
+                 "skin_bLN" = rownames(filt_meta)[filt_meta$cell_type_sort %in% c("Treg_skin", "Tmem_skin", 
+                                                                                  "Treg_bLN", "Tmem_bLN")],
+                 "colon_skin_mLN_bLN" = rownames(filt_meta)[filt_meta$cell_type_sort %in% c("Treg_colon", "Tmem_colon", "Treg_mLN",
+                                                                                            "Tmem_mLN", "Treg_skin", "Tmem_skin",
+                                                                                            "Treg_bLN", "Tmem_bLN")])
+
+de_lt_nlt = list()
+for(i in names(de_nlt_lt)){
+  sub_dat = Seurat::SubsetData(all_data_cl_filt, cells.use = ct_nlt_lt[[i]])
+  
+  sub_dat = SetIdent(sub_dat, ident.use = sub_dat@meta.data$tissue_gen)
+  de_lt_nlt[[i]] = FindMarkers(sub_dat, ident.1 = "NLT", ident.2 = "LT",
+                               logfc.threshold = 0.25, min.pct = 0.01, # 1% CELLS
+                               print.bar = T)
+  
+  gc()
+}
+de_lt_nlt = lapply(de_lt_nlt, function(x) merge(gene_names, x, 
+                                                by.x = 1, by.y = 0))
+save(de_lt_nlt, file = "plots/10X/DE/de_lt_nlt_10X.RData")
+```
+
+
+
+DE Treg vs Tmem (USE 1% CELLS HERE)
+
+```{r}
+ct_nlt_lt = list("colon_mLN_spleen" = rownames(filt_meta)[filt_meta$cell_type_sort %in% c("Treg_colon", "Tmem_colon", "Treg_spleen",
+                                                                                          "Tmem_spleen", "Treg_mLN", "Tmem_mLN")],
+                 "skin_bLN_spleen" = rownames(filt_meta)[filt_meta$cell_type_sort %in% c("Treg_skin", "Tmem_skin", "Treg_spleen", 
+                                                                                         "Tmem_spleen", "Treg_bLN", "Tmem_bLN")],
+                 "colon_skin_mLN_bLN_spleen" = rownames(filt_meta),
+                 "colon_mLN" = rownames(filt_meta)[filt_meta$cell_type_sort %in% c("Treg_colon", "Tmem_colon", 
+                                                                                   "Treg_mLN", "Tmem_mLN")],
+                 "skin_bLN" = rownames(filt_meta)[filt_meta$cell_type_sort %in% c("Treg_skin", "Tmem_skin", 
+                                                                                  "Treg_bLN", "Tmem_bLN")],
+                 "colon_skin_mLN_bLN" = rownames(filt_meta)[filt_meta$cell_type_sort %in% c("Treg_colon", "Tmem_colon", "Treg_mLN",
+                                                                                            "Tmem_mLN", "Treg_skin", "Tmem_skin",
+                                                                                            "Treg_bLN", "Tmem_bLN")])
+
+de_treg_tmem = list()
+for(i in names(de_nlt_lt)){
+  sub_dat = Seurat::SubsetData(all_data_cl_filt, cells.use = ct_nlt_lt[[i]])
+  
+  sub_dat = SetIdent(sub_dat, ident.use = sub_dat@meta.data$cl_ct)
+  print(table(sub_dat@ident))
+  de_treg_tmem[[i]] = FindMarkers(sub_dat, ident.1 = "Treg", ident.2 = "Tmem",
+                                  logfc.threshold = 0.25, min.pct = 0.01, # 1% CELLS
+                                  print.bar = T)
+  
+  gc()
+}
+de_treg_tmem = lapply(de_treg_tmem, function(x) merge(gene_names, x,
+                                                      by.x = 1, by.y = 0))
+save(de_treg_tmem, file = "plots/10X/DE/de_treg_tmem_10X.RData")
+```
+
+
+
+Second pass DE with all genes identified before
+
+```{r}
+load("plots/10X/DE/de_lt_nlt_10X.RData")
+load("plots/10X/DE/de_treg_tmem_10X.RData")
+
+ct_nlt_lt = list("colon_mLN_spleen" = rownames(filt_meta)[filt_meta$cell_type_sort %in% c("Treg_colon", "Tmem_colon", "Treg_spleen",
+                                                                                          "Tmem_spleen", "Treg_mLN", "Tmem_mLN")],
+                 "skin_bLN_spleen" = rownames(filt_meta)[filt_meta$cell_type_sort %in% c("Treg_skin", "Tmem_skin", "Treg_spleen", 
+                                                                                         "Tmem_spleen", "Treg_bLN", "Tmem_bLN")],
+                 "colon_skin_mLN_bLN_spleen" = rownames(filt_meta),
+                 "colon_mLN" = rownames(filt_meta)[filt_meta$cell_type_sort %in% c("Treg_colon", "Tmem_colon", 
+                                                                                   "Treg_mLN", "Tmem_mLN")],
+                 "skin_bLN" = rownames(filt_meta)[filt_meta$cell_type_sort %in% c("Treg_skin", "Tmem_skin", 
+                                                                                  "Treg_bLN", "Tmem_bLN")],
+                 "colon_skin_mLN_bLN" = rownames(filt_meta)[filt_meta$cell_type_sort %in% c("Treg_colon", "Tmem_colon", "Treg_mLN",
+                                                                                            "Tmem_mLN", "Treg_skin", "Tmem_skin",
+                                                                                            "Treg_bLN", "Tmem_bLN")])
+
+
+de_lt_nlt_all = list()
+de_treg_tmem_all = list()
+for(n in names(de_lt_nlt)){
+  genes_use = unique(c(as.character(de_lt_nlt[[n]]$V1),
+                       as.character(de_treg_tmem[[n]]$V1)))
+  sub_dat = Seurat::SubsetData(all_data_cl_filt, cells.use = ct_nlt_lt[[n]])
+  
+  sub_dat = SetIdent(sub_dat, ident.use = sub_dat@meta.data$cl_ct)
+  de_treg_tmem_all[[n]] = FindMarkers(sub_dat, ident.1 = "Treg", ident.2 = "Tmem",
+                                      genes.use = genes_use,
+                                      logfc.threshold = 0, min.pct = 0, 
+                                      print.bar = T)
+  
+  sub_dat = SetIdent(sub_dat, ident.use = sub_dat@meta.data$tissue_gen)
+  de_lt_nlt_all[[n]] = FindMarkers(sub_dat, ident.1 = "NLT", ident.2 = "LT",
+                                   genes.use = genes_use,
+                                   logfc.threshold = 0, min.pct = 0, 
+                                   print.bar = T)
+  gc()
+}
+
+de_treg_tmem_all = lapply(de_treg_tmem_all, function(x) merge(gene_names, x,
+                                                              by.x = 1, by.y = 0))
+save(de_treg_tmem_all, file = "plots/10X/DE/de_treg_tmem_all_10X.RData")
+
+de_lt_nlt_all = lapply(de_lt_nlt_all, function(x) merge(gene_names, x,
+                                                        by.x = 1, by.y = 0))
+save(de_lt_nlt_all, file = "plots/10X/DE/de_lt_nlt_all_10X.RData")
+```
+
+
+
+DE each partition vs all
+
+```{r}
+all_data_cl_filt = SetIdent(all_data_cl_filt, 
+                            ident.use = all_data_cl_filt@meta.data[,"cl_annot"])
+de_subpop_vs_all = FindAllMarkers(all_data_cl_filt, 
+                                  logfc.threshold = 0.25, min.pct = 0.01, 
+                                  return.thresh = 0.05,
+                                  print.bar = F)
+de_subpop_vs_all = merge(gene_names, de_subpop_vs_all, by.x = 1, by.y = 0)
+save(de_subpop_vs_all, file = "plots/10X/DE/de_subpop_vs_all_10X.RData")
+```
+
+
+
+DE each partition per tissue vs all
+
+```{r}
+all_data_cl_filt = SetIdent(all_data_cl_filt, 
+                            ident.use = all_data_cl_filt@meta.data[,"cl_tiss"])
+de_subpop_tiss_vs_all = FindAllMarkers(all_data_cl_filt, 
+                                       logfc.threshold = 0.25, 
+                                       return.thresh = 0.05,
+                                       min.pct = 0.01, print.bar = F)
+de_subpop_tiss_vs_all = merge(gene_names, de_subpop_tiss_vs_all, by.x = 1, by.y = 0)
+save(de_subpop_tiss_vs_all, file = "plots/10X/DE/de_subpop_tiss_vs_all_10X.RData")
+```
+
+
+
+DE colon vs skin
+
+```{r}
+load("plots/10X/DE/de_lt_nlt_all_10X.RData")
+load("plots/10X/DE/de_treg_tmem_all_10X.RData")
+
+genes_use = union(as.character(de_lt_nlt_all$colon_mLN_spleen$V1[de_lt_nlt_all$colon_mLN_spleen$avg_logFC>=0.25 &
+                                                                      de_lt_nlt_all$colon_mLN_spleen$p_val_adj<=0.05]),
+                       as.character(de_lt_nlt_all$skin_bLN_spleen$V1[de_lt_nlt_all$skin_bLN_spleen$avg_logFC>=0.25 &
+                                                                      de_lt_nlt_all$skin_bLN_spleen$p_val_adj<=0.05]))
+
+cells = rownames(all_data_cl_filt@meta.data)[all_data_cl_filt@meta.data$tissue_sp %in% c("colon", "skin")]
+sub_dat = Seurat::SubsetData(all_data_cl_filt, cells.use = cells)
+
+sub_dat = SetIdent(sub_dat, ident.use = sub_dat@meta.data$cl_ct)
+de_colon_skin_ct = FindMarkers(sub_dat, ident.1 = "Treg", ident.2 = "Tmem",
+                               genes.use = genes_use,
+                               logfc.threshold = 0, min.pct = 0, 
+                               print.bar = T)
+
+sub_dat = SetIdent(sub_dat, ident.use = sub_dat@meta.data$tissue_sp)
+de_colon_skin_tiss = FindMarkers(sub_dat, ident.1 = "colon", ident.2 = "skin",
+                                 genes.use = genes_use,
+                                 logfc.threshold = 0, min.pct = 0, 
+                                 print.bar = T)
+
+de_colon_skin_ct = merge(gene_names, de_colon_skin_ct, by.x = 1, by.y = 0)
+de_colon_skin_tiss = merge(gene_names, de_colon_skin_tiss, by.x = 1, by.y = 0)
+
+save(de_colon_skin_ct, file = "plots/10X/DE/de_colon_skin_ct_10X.RData")
+save(de_colon_skin_tiss, file = "plots/10X/DE/de_colon_skin_tiss_10X.RData")
+```
+
+
+
+
+### Other
+DE Treg vs Tmem within each tissue
+
+```{r}
+de_treg_tmem_tiss = list()
+for(i in unique(all_data_cl_filt@meta.data$tissue_sp)){
+  cells = rownames(all_data_cl_filt@meta.data)[all_data_cl_filt@meta.data$tissue_sp==i]
+  sub_dat = Seurat::SubsetData(all_data_cl_filt, cells.use = cells)
+  
+  sub_dat = SetIdent(sub_dat, ident.use = sub_dat@meta.data$cl_ct)
+  de_treg_tmem_tiss[[i]] = FindMarkers(sub_dat, ident.1 = "Treg", ident.2 = "Tmem",
+                                       logfc.threshold = 0.25, min.pct = 0.05,
+                                       print.bar = T)
+  
+  gc()
+}
+de_treg_tmem_tiss = lapply(de_treg_tmem_tiss, 
+                           function(x) merge(gene_names, x, by.x = 1, by.y = 0))
+save(de_treg_tmem_tiss, file = "plots/10X/DE/de_treg_tmem_tiss_10X.RData")
+```
+
+
+
+DE between Treg and Tmem in different tissues
+
+```{r}
+all_data_cl_filt = Seurat::AddMetaData(all_data_cl_filt, 
+                                       data.frame(row.names = rownames(all_data_cl_filt@meta.data),
+                                                  ct_tiss = paste0(all_data_cl_filt@meta.data$cl_ct, "_",
+                                                                   all_data_cl_filt@meta.data$tissue_sp)),
+                                       col.name = "ct_tiss")
+
+comb_mat = combn(unique(all_data_cl_filt@meta.data$ct_tiss), 2)
+
+all_data_cl_filt = SetIdent(all_data_cl_filt, ident.use = all_data_cl_filt@meta.data$ct_tiss)
+
+de_ct_tiss = list()
+for(i in 1:ncol(comb_mat)){
+  name_l = paste0(comb_mat[1,i], ".vs.", comb_mat[2,i])
+  de_ct_tiss[[name_l]] = FindMarkers(all_data_cl_filt, ident.1 = comb_mat[1,i], ident.2 = comb_mat[2,i],
+                                     logfc.threshold = 0.25, min.pct = 0.05, print.bar = T)
+  
+  gc()
+}
+de_ct_tiss = lapply(de_ct_tiss, 
+                    function(x) merge(gene_names, x, by.x = 1, by.y = 0))
+save(de_ct_tiss, file = "plots/10X/DE/de_ct_tiss_10X.RData")
+```
+
+
+
+DE colon vs skin
+
+```{r}
+load("plots/10X/DE/de_lt_nlt_all_10X.RData")
+
+nlt_genes = union(de_lt_nlt_all$colon_mLN_spleen$V1[de_lt_nlt_all$colon_mLN_spleen$avg_logFC>=0.25 &
+                                                      de_lt_nlt_all$colon_mLN_spleen$p_val_adj<=0.05],
+                  de_lt_nlt_all$skin_bLN_spleen$V1[de_lt_nlt_all$skin_bLN_spleen$avg_logFC>=0.25 &
+                                                      de_lt_nlt_all$skin_bLN_spleen$p_val_adj<=0.05])
+
+cells_list = list("all" = rownames(all_data_cl@meta.data)[all_data_cl@meta.data$cl_tiss %in% c("Treg_NLT.in.colon",
+                                                                                               "Treg_NLT.in.skin",
+                                                                                               "Treg_LTlike.in.colon",
+                                                                                               "Treg_suppressive.in.colon")],
+                  "noLT" = rownames(all_data_cl@meta.data)[all_data_cl@meta.data$cl_tiss %in% c("Treg_NLT.in.colon",
+                                                                                                "Treg_NLT.in.skin",
+                                                                                                "Treg_suppressive.in.colon")])
+
+de_cs_list = list()
+for(n in names(cells_list)){
+  dat = SubsetData(all_data_cl, cells.use = cells_list[[n]])
+  
+  dat = SetIdent(dat, ident.use = dat@meta.data$tissue_sp)
+  de_cs_list[[n]] = FindMarkers(dat, ident.1 = "colon", ident.2 = "skin",
+                                genes.use = nlt_genes, logfc.threshold = 0, 
+                                min.pct = 0, print.bar = T)
+}
+de_cs_list = lapply(de_cs_list, 
+                    function(x) merge(gene_names, x, by.x = 1, by.y = 0))
+save(de_cs_list, file = "plots/10X/DE/de_cs_list_10X.RData")
+```
+
+
+
+
+# Pseudotime
+## BGPLVM
+### Treg
+Load data
+
+```{r}
+load("./saved_data/10X/all_data_cl.RData")
+```
+
+
+
+Prepare data
+
+```{r}
+# prepare data function
+prepSubData = function(seurat_obj, cells, genes = NULL){
+  sub_data = Seurat::SubsetData(all_data_cl, cells.use = cells)
+  sub_data <- NormalizeData(object = sub_data, 
+                            scale.factor = 10000, display.progress = F)
+  sub_data = Seurat::FindVariableGenes(sub_data, display.progress = F, 
+                                     num.bin = 100, 
+                                     binning.method = "equal_frequency")
+  
+  exp_mat = if(is.null(genes)){
+    t(as.matrix(sub_data@data[sub_data@var.genes,]))
+  } else{
+    t(as.matrix(sub_data@data[genes,]))
+  }
+  save_mat = merge(sub_data@meta.data[cells,c("cell_type_sort", "cl_annot")],
+                   as.matrix(exp_mat), by = 0)
+  rownames(save_mat) = save_mat[,1]
+  save_mat = save_mat[,-1]
+  
+  return(list("seurat" = sub_data, "mat" = save_mat))
+}
+
+# Skin
+cells = rownames(all_data_cl@meta.data)[all_data_cl@meta.data$cl_annot %in% c("Treg_NLT", "Treg_effector","Treg_lymphoid",
+                                                                              "Treg_NLTlike", "Treg_Stat1") &
+                                          all_data_cl@meta.data$cell_type_sort %in% c("Treg_skin", "Tmem_skin", "Treg_bLN")]
+
+skin_prep = prepSubData(all_data_cl, cells)
+write.csv(skin_prep$mat, file = "./saved_data/10X/Treg_Skin_bLN.csv", 
+          row.names = T, quote = F, col.names = T)
+
+# Colon
+cells = rownames(all_data_cl@meta.data)[all_data_cl@meta.data$cl_annot %in% c("Treg_suppressive", "Treg_NLT", "Treg_effector", 
+                                                                              "Treg_lymphoid", "Treg_NLTlike","Treg_LTlike") &
+                                          all_data_cl@meta.data$cell_type_sort %in% c("Treg_colon", "Treg_mLN")]
+
+colon_prep = prepSubData(all_data_cl, cells)
+write.csv(colon_prep$mat, file = "./saved_data/10X/Treg_Colon_mLN.csv", 
+          row.names = T, quote = F, col.names = T)
+
+# Skin with Colon genes
+colon_genes = colon_prep$seurat@var.genes
+cells = rownames(all_data_cl@meta.data)[all_data_cl@meta.data$cl_annot %in% c("Treg_NLT", "Treg_effector","Treg_lymphoid",
+                                                                              "Treg_NLTlike", "Treg_Stat1") &
+                                          all_data_cl@meta.data$cell_type_sort %in% c("Treg_skin", "Tmem_skin", "Treg_bLN")]
+
+skinproj_prep = prepSubData(all_data_cl, cells, genes = colon_genes)
+write.csv(skin_prep$mat, file = "./saved_data/10X/Treg_Skin_bLN_colongenes.csv", 
+          row.names = T, quote = F, col.names = T)
+
+# Merged
+cells = rownames(all_data_cl@meta.data)[all_data_cl@meta.data$cl_annot %in% c("Treg_suppressive", "Treg_NLT", "Treg_effector",
+                                                                              "Treg_Stat1", 
+                                                                              "Treg_lymphoid", "Treg_NLTlike","Treg_LTlike") &
+                                          all_data_cl@meta.data$cell_type_sort %in% c("Treg_colon", "Treg_mLN",
+                                                                                      "Treg_skin", "Tmem_skin", "Treg_bLN")]
+
+both_prep = prepSubData(all_data_cl, cells)
+write.csv(both_prep$mat, file = "./saved_data/10X/Treg_Colon_Skin_mLN_bLN.csv", 
+          row.names = T, quote = F, col.names = T)
+```
+
+
+
+Prepare downsampled data
+
+```{r}
+# Colon
+cl_annot_colon = data.frame(
+cells = rownames(all_data_cl@meta.data)[all_data_cl@meta.data$cl_annot %in% c("Treg_suppressive", "Treg_NLT", "Treg_effector", 
+                                                                              "Treg_lymphoid", "Treg_NLTlike","Treg_LTlike") &
+                                          all_data_cl@meta.data$cell_type_sort %in% c("Treg_colon", "Treg_mLN")], stringsAsFactors = F
+)
+cl_annot_colon$cl_annot = all_data_cl@meta.data[cl_annot_colon$cells, "cl_annot"]
+
+# Skin
+cl_annot_skin = data.frame(
+cells = rownames(all_data_cl@meta.data)[all_data_cl@meta.data$cl_annot %in% c("Treg_NLT", "Treg_effector","Treg_lymphoid",
+                                                                              "Treg_NLTlike", "Treg_Stat1") &
+                                          all_data_cl@meta.data$cell_type_sort %in% c("Treg_skin", "Tmem_skin", "Treg_bLN")], stringsAsFactors = F
+)
+cl_annot_skin$cl_annot = all_data_cl@meta.data[cl_annot_skin$cells, "cl_annot"]
+
+
+set.seed(1)
+colon_cells_sub = unlist(tapply(cl_annot_colon$cells, cl_annot_colon$cl_annot, 
+                                sample, size = 405, replace = F))
+set.seed(1)
+skin_cells_sub = unlist(tapply(cl_annot_skin$cells, cl_annot_skin$cl_annot, 
+                                sample, size = 55, replace = F))
+
+cells = c(colon_cells_sub, skin_cells_sub)
+
+both_ds_prep = prepSubData(all_data_cl, cells)
+write.csv(both_ds_prep$mat, 
+          file = "./saved_data/10X/Treg_Colon_mLN_Skin_bLN_ds.csv", 
+          row.names = T, quote = F, col.names = T)
+```
+
+
+
+Load results and DE genes
+
+```{r}
+# Load results - 10X
+lv_colon_10x = read.csv("plots/10X/BGPLVM/latent_variables_colon_mLN_Treg_hvg.csv", 
+                    header = T, row.names = 1)
+ard_colon_10x = read.csv("plots/10X/BGPLVM/ARD_colon_mLN_Treg_hvg.csv", 
+                    header = T, row.names = paste0("LV", 0:5))[,-1]
+
+lv_skin_10x = read.csv("plots/10X/BGPLVM/latent_variables_skin_bLN_Treg_hvg.csv", 
+                    header = T, row.names = 1)
+ard_skin_10x = read.csv("plots/10X/BGPLVM/ARD_skin_bLN_Treg_hvg.csv", 
+                    header = T, row.names = paste0("LV", 0:5))[,-1]
+
+lv_both_10x = read.csv("plots/10X/BGPLVM/latent_variables_colon_mLN_skin_bLN_Treg_hvg.csv", 
+                    header = T, row.names = 1)
+ard_both_10x = read.csv("plots/10X/BGPLVM/ARD_colon_mLN_skin_bLN_Treg_hvg.csv", 
+                    header = T, row.names = paste0("LV", 0:5))[,-1]
+
+lv_skinproj_10x = read.csv("plots/10X/BGPLVM/latent_variables_skin_bLN_colongenes.csv", header = T, row.names = 1)
+ard_skinproj_10x = read.csv("plots/10X/BGPLVM/ARD_colon_mLN_skin_bLN_Treg_hvg.csv", 
+                    header = T, row.names = paste0("LV", 0:5))[,-1]
+
+# Correlated genes - 10X
+cor_colon_10x = cor(t(as.matrix(colon_prep$seurat@data[,rownames(lv_colon_10x)])),
+                    lv_colon_10x$LV0)
+cor_skin_10x = cor(t(as.matrix(skin_prep$seurat@data[,rownames(lv_skin_10x)])), 
+                   lv_skin_10x$LV0)
+cor_treg_genes_10x = union(rownames(cor_colon_10x)[abs(cor_colon_10x[,1])>=0.25],
+                           rownames(cor_skin_10x)[abs(cor_skin_10x[,1])>=0.25])
+
+cor_skinproj_10x = cor(t(as.matrix(skin_prep$seurat@data[,rownames(lv_skinproj_10x)])), 
+                   lv_skinproj_10x$LV0)
+cor_proj_genes_10x = union(rownames(cor_colon_10x)[abs(cor_colon_10x[,1])>=0.25],
+                           rownames(cor_skin_10x)[abs(cor_skinproj_10x[,1])>=0.25])
+
+# Treg genes - 10X
+load("plots/10X/DE/de_treg_tmem_all_10X.RData")
+de_treg_genes_10x = union(de_treg_tmem_all$colon_mLN_spleen$V1[de_treg_tmem_all$colon_mLN_spleen$avg_logFC>(-.25)],
+                   de_treg_tmem_all$skin_bLN_spleen$V1[de_treg_tmem_all$skin_bLN_spleen$avg_logFC>(-.25)])
+
+genes_10x = union(de_treg_genes_10x, cor_treg_genes_10x)
+genes_10x_proj = union(de_treg_genes_10x, cor_proj_genes_10x)
+
+
+# Load results - SS2
+lv_colon_ss2 = read.csv("plots/SS2/BGPLVM/latent_variables_colon_mLN_Treg_hvg.csv", 
+                    header = T, row.names = 1)
+ard_colon_ss2 = read.csv("plots/SS2/BGPLVM/ARD_colon_mLN_Treg_hvg.csv", 
+                    header = T, row.names = paste0("LV", 0:5))[,-1]
+
+lv_skin_ss2 = read.csv("plots/SS2/BGPLVM/latent_variables_skin_bLN_Treg_hvg.csv", 
+                    header = T, row.names = 1)
+ard_skin_ss2 = read.csv("plots/SS2/BGPLVM/ARD_skin_bLN_Treg_hvg.csv", 
+                    header = T, row.names = paste0("LV", 0:5))[,-1]
+
+# Correlated genes - SS2
+load("saved_data/SS2/sr_list_SS2.RData")
+cor_colon_ss2 = cor(t(as.matrix(sr_list$mouse_colon@data[,rownames(lv_colon_ss2)])),
+                    lv_colon_ss2$LV0)
+cor_skin_ss2 = cor(t(as.matrix(sr_list$mouse_skin@data[,rownames(lv_skin_ss2)])), 
+                   lv_skin_ss2$LV0)
+cor_treg_genes_ss2 = union(rownames(cor_colon_ss2)[abs(cor_colon_ss2[,1])>=0.25],
+                           rownames(cor_skin_ss2)[abs(cor_skin_ss2[,1])>=0.25])
+
+# Treg genes - SS2
+load("plots/SS2/DE/de_treg_tmem_all_SS2.RData")
+de_treg_genes_ss2 = union(de_treg_tmem_all_ss2$mouse_colon$V1[de_treg_tmem_all_ss2$mouse_colon$avg_logFC>(-.25)],
+                   de_treg_tmem_all_ss2$mouse_skin$V1[de_treg_tmem_all_ss2$mouse_skin$avg_logFC>(-.25)])
+
+genes_ss2 = union(de_treg_genes_ss2, cor_treg_genes_ss2)
+
+# set gene lists
+colon_exp_genes = apply(colon_prep$seurat@data, 1, 
+                        function(x) sum(tapply(x, colon_prep$seurat@meta.data$cl_annot, 
+                                               function(y) sum(y>0)>=30))>0)
+colon_exp_genes = names(colon_exp_genes)[colon_exp_genes]
+skin_exp_genes = apply(skin_prep$seurat@data, 1,
+                       function(x) sum(tapply(x, skin_prep$seurat@meta.data$cl_annot,
+                                              function(y) sum(y>0)>=30))>0)
+skin_exp_genes = names(skin_exp_genes)[skin_exp_genes]
+thr_genes = intersect(colon_exp_genes,skin_exp_genes)
+
+ss2_10x_genes = union(genes_10x, genes_ss2)
+gene_lists = list("AllGenes" = ss2_10x_genes[ss2_10x_genes %in% thr_genes],
+                  "10xGenes" = genes_10x[genes_10x %in% thr_genes],
+                  "10xGenes_proj" = genes_10x_proj[genes_10x_proj %in% thr_genes])
+
+# prepare expression and LVs
+lv_list = list("colon" = lv_colon_10x$LV0, "skin" = lv_skin_10x$LV0,
+               "skin_proj" = lv_skinproj_10x$LV0, 
+               "both" = lv_both_10x$LV0,
+               "both_skin" = lv_both_10x[rownames(lv_skin_10x),"LV0"],
+               "both_colon" = lv_both_10x[rownames(lv_colon_10x),"LV0"])
+
+exp_list = list("colon" = as.matrix(colon_prep$seurat@data[,lv_colon_10x$cell]), 
+                "skin" = as.matrix(skin_prep$seurat@data[,lv_skin_10x$cell]),
+                "skin_proj" = as.matrix(skin_prep$seurat@data[,lv_skinproj_10x$cell]),
+                "both_skin" = as.matrix(both_prep$seurat@data[,rownames(lv_skin_10x)]),
+                "both_colon" = as.matrix(both_prep$seurat@data[,rownames(lv_colon_10x)]))
+```
+
+
+
+Run switchde
+
+```{r}
+switchde_list_10x_notscaled = list()
+for(n in names(exp_list)){
+  for(g in names(gene_lists)){
+    switchde_list_10x_notscaled[[paste0(n, "_", g)]] = switchde(exp_list[[n]][gene_lists[[g]],], lv_list[[n]])
+  }
+}
+switchde_list_10x_notscaled = lapply(switchde_list_10x_notscaled, 
+                                     function(x) merge(x, gene_names, by = 1))
+save(switchde_list_10x_notscaled, 
+     file = "plots/10X/BGPLVM/switchde_list_10x_notscaled.RData")
+
+if(F){
+switchde_list_10x_scaled = list()
+for(n in names(exp_list)){
+  for(g in names(gene_lists)){
+    switchde_list_10x_scaled[[paste0(n, "_", g)]] = switchde(exp_list[[n]][gene_lists[[g]],], scale(lv_list[[n]]))
+  }
+}
+switchde_list_10x_scaled = lapply(switchde_list_10x_scaled, 
+                                  function(x) merge(x, gene_names, by = 1))
+save(switchde_list_10x_scaled, 
+     file = "plots/10X/BGPLVM/switchde_list_10x_scaled.RData")
+}
+```
+
+
+
+Downsampled switchde - match min population size
+
+```{r}
+cl_annot_skin = data.frame("cells" = as.character(lv_skinproj_10x$cell),
+                           "cl_annot" = all_data_cl@meta.data[as.character(lv_skinproj_10x$cell),"cl_annot"])
+
+set.seed(1)
+subs_skin_list = list()
+for(i in 1:100){
+  subs_skin_list[[paste0("s",i)]] = unlist(tapply(cl_annot_skin$cells, cl_annot_skin$cl_annot, sample, size = 55, replace = F))
+}
+
+switchde_skindownsample = list()
+for(n in names(subs_skin_list)){
+  sub_exp = exp_list$skin_proj[gene_lists$`10xGenes_proj`, subs_skin_list[[n]]]
+  sub_exp = sub_exp[rowSums(sub_exp)>0,]
+  switchde_skindownsample[[n]] = switchde(sub_exp, lv_skinproj_10x[subs_skin_list[[n]],"LV0"])
+}
+switchde_skindownsample = lapply(switchde_skindownsample, 
+                                 function(x) merge(x, gene_names, by = 1))
+save(switchde_skindownsample, 
+     file = "plots/10X/BGPLVM/switchde_skindownsample.RData")
+
+
+
+cl_annot_colon = data.frame("cells" = as.character(lv_colon_10x$cell),
+                           "cl_annot" = all_data_cl@meta.data[as.character(lv_colon_10x$cell),"cl_annot"])
+
+set.seed(1)
+subs_colon_list = list()
+for(i in 1:100){
+  subs_colon_list[[paste0("s",i)]] = unlist(tapply(cl_annot_colon$cells, cl_annot_colon$cl_annot, sample, size = 55, replace = F))
+}
+
+switchde_colondownsample = list()
+for(n in names(subs_colon_list)){
+  sub_exp = exp_list$colon[gene_lists$`10xGenes_proj`, subs_colon_list[[n]]]
+  sub_exp = sub_exp[rowSums(sub_exp)>0,]
+  switchde_colondownsample[[n]] = switchde(sub_exp, lv_colon_10x[subs_colon_list[[n]],"LV0"])
+}
+switchde_colondownsample = lapply(switchde_colondownsample, 
+                                 function(x) merge(x, gene_names, by = 1))
+save(switchde_colondownsample, 
+     file = "plots/10X/BGPLVM/switchde_colondownsample.RData")
+
+
+# DS 405 (min colon pop)
+set.seed(1)
+subs_colon_more_list = list()
+for(i in 1:100){
+  subs_colon_more_list[[paste0("s",i)]] = unlist(tapply(cl_annot_colon$cells, 
+                                                        cl_annot_colon$cl_annot, sample, size = 405, replace = F))
+}
+
+switchde_colondownsample_more = list()
+for(n in names(subs_colon_list)){
+  sub_exp = exp_list$colon[gene_lists$`10xGenes_proj`, subs_colon_more_list[[n]]]
+  sub_exp = sub_exp[rowSums(sub_exp)>0,]
+  switchde_colondownsample_more[[n]] = switchde(sub_exp, lv_colon_10x[subs_colon_more_list[[n]],"LV0"])
+}
+switchde_colondownsample_more = lapply(switchde_colondownsample_more, 
+                                 function(x) merge(x, gene_names, by = 1))
+save(switchde_colondownsample_more, 
+     file = "plots/10X/BGPLVM/switchde_colondownsample_more.RData")
+```
+
+
+
+Summarise values different switchDE runs - median values
+
+```{r}
+load("plots/10X/BGPLVM/switchde_list_10x_notscaled.RData")
+load("plots/10X/BGPLVM/switchde_skindownsample.RData")
+load("plots/10X/BGPLVM/switchde_colondownsample.RData")
+load("plots/10X/BGPLVM/switchde_colondownsample_more.RData")
+
+genes_use = unique(switchde_skindownsample$s1$gene)
+
+getTabSummary = function(var = "t0"){
+  vals = data.frame(row.names = genes_use,
+                       "skin" = switchde_list_10x_notscaled$skin_proj_10xGenes_proj[match(genes_use,switchde_list_10x_notscaled$skin_proj_10xGenes_proj$gene),var],
+                       "colon" = switchde_list_10x_notscaled$colon_10xGenes_proj[match(genes_use,switchde_list_10x_notscaled$colon_10xGenes_proj$gene),var],
+                       "skin_mean" = NA,
+                       "colon_mean" = NA,
+                       "colon_mean_more" = NA)
+  
+  for(g in genes_use){
+    vals$skin_mean[rownames(vals)==g] = median(unlist(sapply(switchde_skindownsample, function(x) x[x$gene==g,var])), 
+                                                        na.rm = T)
+    vals$colon_mean[rownames(vals)==g] = median(unlist(sapply(switchde_colondownsample, function(x) x[x$gene==g,var])), 
+                                                         na.rm = T)
+    vals$colon_mean_more[rownames(vals)==g] = median(unlist(sapply(switchde_colondownsample_more, 
+                                                                   function(x) x[x$gene==g,var])), na.rm = T)
+  }
+  
+  return(vals)
+}
+
+
+t0_vals = getTabSummary("t0")
+k_vals = getTabSummary("k")
+k_vals_t = asinh(k_vals)
+mu0_vals = getTabSummary("mu0")
+qval_vals = getTabSummary("qval")
+
+# save variables
+switch_used_vars = list("colon" = data.frame("gene" = rownames(t0_vals),
+                                             "t0" = t0_vals$colon_mean_more,
+                                             "k" = k_vals$colon_mean_more,
+                                             "mu0" = mu0_vals$colon_mean_more,
+                                             "qval" = qval_vals$colon_mean_more),
+                        "skin" = data.frame("gene" = rownames(t0_vals),
+                                             "t0" = t0_vals$skin_mean,
+                                             "k" = k_vals$skin_mean,
+                                             "mu0" = mu0_vals$skin_mean,
+                                             "qval" = qval_vals$skin_mean))
+save(switch_used_vars, file = "plots/10X/BGPLVM/switch_used_vars.RData")
+```
+
+
+
+Show GO Terms changing in trajectory
+
+```{r, fig.width=4.5, fig.height=3}
+# Get GO Terms for genes switchDE in both
+sig_g = rownames(qval_vals)[qval_vals$skin_mean<=0.05 &
+                              qval_vals$colon_mean_more<=0.05]
+
+#sig_g = intersect(skin_pars_df$gene[skin_pars_df$qval<=0.01], colon_pars_df$gene[colon_pars_df$qval<=0.01])
+
+write.table(sig_g, 
+            file = "./saved_data/10X/genes_lv_10X.txt", quote = F, row.names = F,
+            col.names = F)
+
+#test = gProfileR::gprofiler(as.character(sig_g), organism = "mmusculus", correction_method = "fdr", hier_filtering = "moderate", max_p_value = 0.05,) was not working on Sanger farm
+
+gp_res = read.table("plots/10X/BGPLVM/gp_10X_genes_proj.txt", header = T, 
+                    stringsAsFactors = F, sep = "\t", quote = "")
+
+# k with same signal
+k_genes = rownames(k_vals_t)[(k_vals_t$skin_mean>0 & k_vals_t$colon_mean_more>0) |
+                               (k_vals_t$skin_mean<0 &
+                                  k_vals_t$colon_mean_more<0)]
+# t0 in at least one trajectory
+t0_int_g = rownames(t0_vals)[(min(lv_list$colon)<=t0_vals$skin_mean &
+                              t0_vals$skin_mean<=max(lv_list$colon)) |
+                              (min(lv_list$colon)<=t0_vals$colon_mean_more &
+                              t0_vals$colon_mean_more<=max(lv_list$colon))]
+sig_g = intersect(intersect(k_genes, sig_g), t0_int_g)
+
+t0_k_tab = merge(t0_vals[sig_g,c(3,5)], k_vals_t[sig_g,c(3,5)], by = 0)
+t0_k_tab = merge(gene_names, t0_k_tab, by = 1)
+
+# filter genes by t0 diff
+t0_k_tab$t0_diff = t0_k_tab$colon_mean_more.x - t0_k_tab$skin_mean.x
+t0_k_tab$t0_diff_abs = abs(t0_k_tab$t0_diff)
+t0_k_tab$keep = t0_k_tab$t0_diff_abs<=median(t0_k_tab$t0_diff_abs)
+colnames(t0_k_tab)[1:6] = c("ens_g", "gene", "skin_t0_subs_median", "colon_t0_subs_median", 
+                            "skin_k_subs_median", "colon_k_subs_median")
+write.csv(t0_k_tab, "plots/10X/BGPLVM/t0_k_tab.csv", col.names = T, row.names = F, quote = F)
+t0_k_tab = t0_k_tab[t0_k_tab$keep,]
+
+# genes per term
+genes_per_term = list()
+for(term in unique(gp_res$term.name)){
+  gg = unlist(strsplit(gp_res$intersection[gp_res$term.name==term], ","))
+  if(any(gg %in% t0_k_tab$ens_g)) genes_per_term[[term]] = gg
+}
+
+# mean t0 per term
+t0_per_term_c = list()
+t0_per_term_s = list()
+for(term in names(genes_per_term)){
+  t0_per_term_s[[term]] = mean(t0_k_tab[t0_k_tab$ens_g %in% genes_per_term[[term]], "skin_t0_subs_median"])
+  t0_per_term_c[[term]] = mean(t0_k_tab[t0_k_tab$ens_g %in% genes_per_term[[term]], "colon_t0_subs_median"])
+}
+
+# SE per term
+se <- function(x) sqrt(var(x)/length(x))
+t0_per_term_c_se = list()
+t0_per_term_s_se = list()
+for(term in names(genes_per_term)){
+  t0_per_term_s_se[[term]] = se(t0_k_tab[t0_k_tab$ens_g %in% genes_per_term[[term]], "skin_t0_subs_median"])
+  t0_per_term_c_se[[term]] = se(t0_k_tab[t0_k_tab$ens_g %in% genes_per_term[[term]], "colon_t0_subs_median"])
+}
+
+# table results per term
+df_term = data.frame(row.names = names(t0_per_term_c), 
+                     "colon_t0_mean" = unlist(t0_per_term_c), 
+                     "skin_t0_mean" = unlist(t0_per_term_s),
+                     "colon_t0_se" = unlist(t0_per_term_c_se), 
+                     "skin_t0_se" = unlist(t0_per_term_s_se))
+df_term = merge(df_term, gp_res[,c(12,10)], by.x = 0, by.y = 1)
+
+df_term$t0_diff = df_term$colon_t0_mean - df_term$skin_t0_mean
+df_term$t0_diff_abs = abs(df_term$t0_diff)
+
+ngenes_term = unlist(lapply(genes_per_term, 
+                            function(x) sum(x %in% t0_k_tab$ens_g)))
+df_term = merge(df_term, data.frame("n_genes" = ngenes_term), 
+                by.x = 1, by.y = 0)
+
+term_genename = lapply(genes_per_term, 
+                       function(x) paste(gene_names[gene_names$V1 %in% x[x %in% t0_k_tab$ens_g],"V2"], collapse = ";"))
+term_genename = data.frame("term" = names(term_genename), 
+                           "genes" = unlist(term_genename))
+df_term = merge(df_term, term_genename, by = 1)
+colnames(df_term)[1] = "term"
+df_term$term = gsub(",", "_", df_term$term)
+write.csv(df_term, "plots/10X/BGPLVM/df_term_t0.csv", 
+          col.names = T, row.names = F, quote = F)
+```
+
+
+
+# Logistic regression
+Load data
+
+```{r}
+load("saved_data/10X/all_data_cl.RData")
+```
+
+
+
+## All 10X Treg from colon Treg
+Subset data and save
+
+```{r}
+cells = rownames(all_data_cl@meta.data)[all_data_cl@meta.data$cl_tiss %in% c("Treg_NLT.in.colon", "Treg_suppressive.in.colon", 
+                                                                            "Treg_stress.in.colon", "Treg_LTlike.in.colon")]
+train_dat = Seurat::SubsetData(all_data_cl, cells.use = cells)
+write.csv(t(as.matrix(train_dat@data)), file = "saved_data/10X/train_data_TregColon.csv", 
+          quote = F, col.names = T, row.names = T)
+write.csv(train_dat@meta.data[,"cl_annot"], file = "saved_data/10X/train_data_TregColon_labels.csv", 
+          quote = F, col.names = T, row.names = T)
+
+cells = rownames(all_data_cl@meta.data)[all_data_cl@meta.data$cl_tiss %in% c("Treg_NLT.in.colon", "Treg_suppressive.in.colon", 
+                                                                             "Treg_LTlike.in.colon")]
+train_dat = Seurat::SubsetData(all_data_cl, cells.use = cells)
+write.csv(t(as.matrix(train_dat@data)), file = "saved_data/10X/train_data_TregColon_noStress.csv", 
+          quote = F, col.names = T, row.names = T)
+write.csv(train_dat@meta.data[,"cl_annot"], file = "saved_data/10X/train_data_TregColon_noStress_labels.csv", 
+          quote = F, col.names = T, row.names = T)
+
+cells = rownames(all_data_cl@meta.data)[grepl("Treg", all_data_cl@meta.data$cl_tiss)]
+test_dat = Seurat::SubsetData(all_data_cl, cells.use = cells)
+write.csv(t(as.matrix(test_dat@data)), file = "saved_data/10X/test_data_Treg.csv", 
+          quote = F, col.names = T, row.names = T)
+```
+
+
+
+Train model and classify
+
+```{python}
+import pandas as pd
+from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import cross_validate
+import numpy as np
+
+np.random.seed(1)
+
+# Train model
+x_train = pd.read_csv("saved_data/10X/train_data_TregColon.csv", index_col=0)
+y_train = pd.read_csv("saved_data/10X/train_data_TregColon_labels.csv", index_col=0, header = 0)
+
+logisticRegr = LogisticRegression(max_iter = 10000, n_jobs = -1, random_state = 0, penalty="l1")
+logisticRegr.fit(x_train, y_train.values.ravel())
+
+# 10 fold CV
+cv_score = cross_validate(logisticRegr, x_train, y_train.values.ravel(), cv = 10, 
+return_train_score = True, scoring = ('accuracy'))
+print([np.mean(cv_score[x]) for x in cv_score.keys()])
+
+# Test
+x_test = pd.read_csv("saved_data/10X/test_data_Treg.csv", index_col=0, header = 0)
+
+predictions = logisticRegr.predict(x_test)
+predictions_prob = logisticRegr.predict_proba(x_test)
+
+pd.DataFrame(predictions).to_csv("plots/10X/LR/preds_test_data_Treg.csv")
+pd.DataFrame(predictions_prob).to_csv("plots/10X/LR/probs_test_data_Treg.csv", header = logisticRegr.classes_)
+```
+
+
+
+Train model and classify - no stress
+
+```{python}
+import pandas as pd
+from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import cross_validate
+import numpy as np
+
+np.random.seed(1)
+
+# Train model
+x_train = pd.read_csv("saved_data/10X/train_data_TregColon_noStress.csv", index_col=0)
+y_train = pd.read_csv("saved_data/10X/train_data_TregColon_noStress_labels.csv", index_col=0, header = 0)
+
+logisticRegr = LogisticRegression(max_iter = 10000, n_jobs = -1, random_state = 0, penalty="l1")
+logisticRegr.fit(x_train, y_train.values.ravel())
+
+# 10 fold CV
+cv_score = cross_validate(logisticRegr, x_train, y_train.values.ravel(), cv = 10, 
+return_train_score = True, scoring = ('accuracy'))
+print([np.mean(cv_score[x]) for x in cv_score.keys()])
+
+# Test
+x_test = pd.read_csv("saved_data/10X/test_data_Treg.csv", index_col=0, header = 0)
+
+predictions = logisticRegr.predict(x_test)
+predictions_prob = logisticRegr.predict_proba(x_test)
+
+pd.DataFrame(predictions).to_csv("plots/10X/LR/preds_test_data_Treg_noStress.csv")
+pd.DataFrame(predictions_prob).to_csv("plots/10X/LR/probs_test_data_Treg_noStress.csv", header = logisticRegr.classes_)
+```
+
+
+
+Prepare data frames
+
+```{r}
+lr_res = read.csv("plots/10X/LR/preds_test_data_Treg.csv", header = T, row.names = 1)
+meta = test_dat@meta.data
+meta$labs = lr_res$X0
+
+write.csv(meta, "plots/10X/LR/preds_metadata_Treg_10X.csv", 
+          col.names = T, row.names = T, quote = F)
+
+lr_res = read.csv("plots/10X/LR/preds_test_data_Treg_noStress.csv", header = T, row.names = 1)
+meta = test_dat@meta.data
+meta$labs = lr_res$X0
+
+write.csv(meta, "plots/10X/LR/preds_metadata_Treg_10X_noStress.csv", 
+          col.names = T, row.names = T, quote = F)
+```
+
+
+
+## All SS2 Treg from colon Treg
+Subset data and save
+
+```{r}
+load("saved_data/SS2/sr_list_SS2.RData")
+
+for(n in names(sr_list)[1:3]){
+  cells = rownames(sr_list[[n]]@meta.data)[grepl("Treg", sr_list[[n]]@meta.data$cell.type)]
+  test_dat = Seurat::SubsetData(sr_list[[n]], cells.use = cells)
+  
+  if(n=="mouse_colon"){
+    meta = test_dat@meta.data[,c("tissue_cell", "t_c_cond", "tissue", 
+                                 "cell.type", "tissue_exp", "condition")]
+    exp = as.matrix(test_dat@data)
+  } else{
+    meta = rbind(meta, test_dat@meta.data[,c("tissue_cell", "t_c_cond", "tissue", 
+                                             "cell.type", "tissue_exp", "condition")])
+    exp = merge(exp, as.matrix(test_dat@data), by = 0)
+    rownames(exp) = exp[,1]
+    exp = exp[,-1]
+  }
+}
+
+# 10X genes
+genes_use = rownames(train_dat@data)
+exp = exp[rownames(exp) %in% genes_use,]
+more_genes = matrix(0, ncol = ncol(exp), nrow = sum(!genes_use %in% rownames(exp)))
+colnames(more_genes) = colnames(exp)
+rownames(more_genes) = genes_use[!genes_use %in% rownames(exp)]
+exp = rbind(exp, more_genes)
+
+write.csv(t(as.matrix(exp[genes_use,])), file = "saved_data/SS2/test_data_Treg_SS2.csv", 
+          quote = F, col.names = T, row.names = T)
+```
+
+
+
+Train model and classify
+
+```{python}
+import pandas as pd
+from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import cross_validate
+import numpy as np
+
+np.random.seed(1)
+
+# Train model
+x_train = pd.read_csv("saved_data/10X/train_data_TregColon.csv", index_col=0)
+y_train = pd.read_csv("saved_data/10X/train_data_TregColon_labels.csv", index_col=0, header = 0)
+
+logisticRegr = LogisticRegression(max_iter = 10000, n_jobs = -1, random_state = 0, penalty="l1")
+logisticRegr.fit(x_train, y_train.values.ravel())
+
+# 10 fold CV
+cv_score = cross_validate(logisticRegr, x_train, y_train.values.ravel(), cv = 10, 
+return_train_score = True, scoring = ('accuracy'))
+print([np.mean(cv_score[x]) for x in cv_score.keys()])
+
+# Test
+x_test = pd.read_csv("saved_data/SS2/test_data_Treg_SS2.csv", index_col=0, header = 0)
+
+predictions = logisticRegr.predict(x_test)
+predictions_prob = logisticRegr.predict_proba(x_test)
+
+pd.DataFrame(predictions).to_csv("plots/10X/LR/preds_test_data_Treg_SS2.csv")
+pd.DataFrame(predictions_prob).to_csv("plots/10X/LR/probs_test_data_Treg_SS2.csv", header = logisticRegr.classes_)
+```
+
+
+
+Prepare data frame
+
+```{r}
+lr_res = read.csv("plots/10X/LR/preds_test_data_Treg_SS2.csv", header = T, row.names = 1)
+meta$labs = lr_res$X0
+
+write.csv(meta, "plots/10X/LR/preds_metadata_Treg_SS2.csv", 
+          col.names = T, row.names = T, quote = F)
+```
+
+
+
+## All SS2 Treg from all 10X Treg
+Subset data and save
+
+```{r}
+# Train
+cells = rownames(all_data_cl@meta.data)[grepl("Treg", all_data_cl@meta.data$cl_tiss) & 
+                                          !grepl("skin", all_data_cl@meta.data$cl_tiss)]
+train_dat = Seurat::SubsetData(all_data_cl, cells.use = cells)
+write.csv(t(as.matrix(train_dat@data)), file = "saved_data/10X/train_data_TregNoSkin.csv", 
+          quote = F, col.names = T, row.names = T)
+write.csv(train_dat@meta.data[,"cl_annot"], file = "saved_data/10X/train_data_TregNoSkin_labels.csv", 
+          quote = F, col.names = T, row.names = T)
+
+# Train no Stress
+cells = rownames(all_data_cl@meta.data)[grepl("Treg", all_data_cl@meta.data$cl_tiss) & 
+                                          !grepl("skin", all_data_cl@meta.data$cl_tiss) & 
+                                          !grepl("stress", all_data_cl@meta.data$cl_annot)]
+train_dat = Seurat::SubsetData(all_data_cl, cells.use = cells)
+write.csv(t(as.matrix(train_dat@data)), file = "saved_data/10X/train_data_TregNoSkin_noStress.csv", 
+          quote = F, col.names = T, row.names = T)
+write.csv(train_dat@meta.data[,"cl_annot"], file = "saved_data/10X/train_data_TregNoSkin_labels_noStress.csv", 
+          quote = F, col.names = T, row.names = T)
+
+# Test
+load("saved_data/SS2/sr_list_SS2.RData")
+for(n in names(sr_list)[1:3]){
+  cells = rownames(sr_list[[n]]@meta.data)[grepl("Treg", sr_list[[n]]@meta.data$cell.type)]
+  test_dat = Seurat::SubsetData(sr_list[[n]], cells.use = cells)
+  
+  if(n=="mouse_colon"){
+    meta = test_dat@meta.data[,c("tissue_cell", "t_c_cond", "tissue", 
+                                 "cell.type", "tissue_exp", "condition")]
+    exp = as.matrix(test_dat@data)
+  } else{
+    meta = rbind(meta, test_dat@meta.data[,c("tissue_cell", "t_c_cond", "tissue", 
+                                             "cell.type", "tissue_exp", "condition")])
+    exp = merge(exp, as.matrix(test_dat@data), by = 0)
+    rownames(exp) = exp[,1]
+    exp = exp[,-1]
+  }
+}
+
+# 10X genes
+genes_use = rownames(train_dat@data)
+exp = exp[rownames(exp) %in% genes_use,]
+more_genes = matrix(0, ncol = ncol(exp), nrow = sum(!genes_use %in% rownames(exp)))
+colnames(more_genes) = colnames(exp)
+rownames(more_genes) = genes_use[!genes_use %in% rownames(exp)]
+exp = rbind(exp, more_genes)
+
+write.csv(t(as.matrix(exp[genes_use,])), file = "saved_data/SS2/test_data_Treg_SS2.csv", 
+          quote = F, col.names = T, row.names = T)
+```
+
+
+
+Train model and classify
+
+```{python}
+import pandas as pd
+from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import cross_validate
+import numpy as np
+
+np.random.seed(1)
+
+# Train model
+x_train = pd.read_csv("saved_data/10X/train_data_TregNoSkin.csv", index_col=0)
+y_train = pd.read_csv("saved_data/10X/train_data_TregNoSkin_labels.csv", index_col=0, header = 0)
+
+logisticRegr = LogisticRegression(max_iter = 10000, n_jobs = -1, random_state = 0, penalty="l1")
+logisticRegr.fit(x_train, y_train.values.ravel())
+
+# 10 fold CV
+cv_score = cross_validate(logisticRegr, x_train, y_train.values.ravel(), cv = 10, 
+return_train_score = True, scoring = ('accuracy'))
+print([np.mean(cv_score[x]) for x in cv_score.keys()])
+
+# Test
+x_test = pd.read_csv("saved_data/SS2/test_data_Treg_SS2.csv", index_col=0, header = 0)
+
+predictions = logisticRegr.predict(x_test)
+predictions_prob = logisticRegr.predict_proba(x_test)
+
+pd.DataFrame(predictions).to_csv("plots/10X/LR/preds_test_data_Treg_SS2_allTreg10X.csv")
+pd.DataFrame(predictions_prob).to_csv("plots/10X/LR/probs_test_data_Treg_SS2_allTreg10X.csv", header = logisticRegr.classes_)
+```
+
+
+
+Train model and classify - no stress
+
+```{python}
+import pandas as pd
+from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import cross_validate
+import numpy as np
+
+np.random.seed(1)
+
+# Train model
+x_train = pd.read_csv("saved_data/10X/train_data_TregNoSkin_noStress.csv", index_col=0)
+y_train = pd.read_csv("saved_data/10X/train_data_TregNoSkin_labels_noStress.csv", index_col=0, header = 0)
+
+logisticRegr = LogisticRegression(max_iter = 10000, n_jobs = -1, random_state = 0, penalty="l1")
+logisticRegr.fit(x_train, y_train.values.ravel())
+
+# 10 fold CV
+cv_score = cross_validate(logisticRegr, x_train, y_train.values.ravel(), cv = 10, 
+return_train_score = True, scoring = ('accuracy'))
+print([np.mean(cv_score[x]) for x in cv_score.keys()])
+
+# Test
+x_test = pd.read_csv("saved_data/SS2/test_data_Treg_SS2.csv", index_col=0, header = 0)
+
+predictions = logisticRegr.predict(x_test)
+predictions_prob = logisticRegr.predict_proba(x_test)
+
+pd.DataFrame(predictions).to_csv("plots/10X/LR/preds_test_data_Treg_SS2_allTreg10X_noStress.csv")
+pd.DataFrame(predictions_prob).to_csv("plots/10X/LR/probs_test_data_Treg_SS2_allTreg10X_noStress.csv", header = logisticRegr.classes_)
+```
+
+
+
+Prepare data frame
+
+```{r}
+lr_res = read.csv("plots/10X/LR/preds_test_data_Treg_SS2_allTreg10X.csv", header = T, row.names = 1)
+meta$labs = lr_res$X0
+
+write.csv(meta, "plots/10X/LR/preds_metadata_Treg_SS2_allTreg10X.csv", 
+          col.names = T, row.names = T, quote = F)
+
+lr_res = read.csv("plots/10X/LR/preds_test_data_Treg_SS2_allTreg10X_noStress.csv", header = T, row.names = 1)
+meta$labs = lr_res$X0
+
+write.csv(meta, "plots/10X/LR/preds_metadata_Treg_SS2_allTreg10X_noStress.csv", 
+          col.names = T, row.names = T, quote = F)
+```
+
+
+

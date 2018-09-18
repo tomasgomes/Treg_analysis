@@ -1,0 +1,3177 @@
+---
+title: "Make Figures"
+output: html_notebook
+---
+
+
+
+# Setup
+Load libraries
+
+```{r}
+library(Seurat)
+library(patchwork)
+library(ggrepel)
+
+gene_names = read.table("../../../10x-runs/ricardo/3324STDY7421492/outs/filtered_gene_bc_matrices/mm10/genes.tsv")
+
+gene_names_human = read.csv("saved_data/gene_names_human_GRCh38_93.csv", 
+                            header = T)
+```
+
+
+
+Define palettes
+
+```{r}
+cl_allCells_pal = c("#d10c00","#e5acac","#ef8753","#217dff","#6db9ff","#599958","#7c7b7b","#c6c6c6")
+sort_pal = c("#d10c00", "#e5acac", "#ffb432", "#f9d089", "#3264fc", "#91acff", "#28c2ff", "#a3e4ff", "#8851ff", "#b08cff")
+
+de_colon_nlt_pal = c(sort_pal[1:2], cl_allCells_pal[4:5], "grey58")
+de_skin_nlt_pal = c(sort_pal[3:4], cl_allCells_pal[4:5], "grey58")
+
+cl_treg_pal = c("Treg NLT-like" = "#F27676", "eTreg" = "#a96bce", "cTreg" = "#217dff",
+                "Treg Stat1" = "#455680", "Treg NLT" = "#d10c00", "Treg suppressive" = "#f97800", 
+                "Treg LT-like" = "#66a4ff", "Tmem NLT" = "#e5acac", "Stress/low qual" = "#c6c6c6")
+cl_tmem_pal = c("Tmem Tfh" = "#a96bce", "Tmem LT" = "#217dff",
+                "Treg Stat1" = "#455680", "Treg suppressive" = "#f97800", 
+                "Tmem LT-like" = "#66a4ff", "Tmem Th1" = RColorBrewer::brewer.pal(9, "Set1")[3],
+                "Tmem Th17" = RColorBrewer::brewer.pal(8, "Set2")[6] , "Tmem Th2" = RColorBrewer::brewer.pal(8, "Accent")[7],
+                "Tmem cycling" = "#ff0000",
+                "Tmem lymphoid resident" = "#455680", "Tmem lymphoid egressing" = "#F27676",
+                "Tmem Cxcl10" = "#dd0881",
+                "Treg NLT" = "#d10c00", "Tmem NLT" = "#e5acac", "Stress/low qual" = "#c6c6c6")
+
+cl_treg_pal_alt = cl_treg_pal
+names(cl_treg_pal_alt) = gsub(" ", "\n", names(cl_treg_pal_alt))
+names(cl_treg_pal_alt)[5] = "Treg NLT"
+
+col_cc = c("grey45", "#ff661a", "#ff0000")
+col_mel_gene_groups = c(cl_allCells_pal[c(1,4)], "#ffad33", "#000000")
+
+colours_mouse = RColorBrewer::brewer.pal(12, "Paired")[c(5,6, 1,2, 9,10)]
+colours_mel = rev(RColorBrewer::brewer.pal(11, "RdYlBu")[c(1,11)])
+colours_h_ind = c(RColorBrewer::brewer.pal(11, "RdYlBu")[c(9,10)], RColorBrewer::brewer.pal(11, "RdYlGn")[2:4])
+colours_h_tc = c(RColorBrewer::brewer.pal(11, "PuOr")[8:10], RColorBrewer::brewer.pal(9, "Greens")[4], RColorBrewer::brewer.pal(9, "BuGn")[6], RColorBrewer::brewer.pal(9, "Greens")[9], RColorBrewer::brewer.pal(9, "YlOrRd")[c(3,4)], RColorBrewer::brewer.pal(12, "Paired")[6])
+
+cols_m_h = c("Shared" = "#E0B814", "Human" = "#145BB3", 
+             "Mouse" = "#28B54A", "None" = "#c6c6c6")
+
+colours_clon = unique(c(RColorBrewer::brewer.pal(8, "Set1"), RColorBrewer::brewer.pal(8, "Dark2"),
+                RColorBrewer::brewer.pal(12, "Set3"), RColorBrewer::brewer.pal(8, "Set2"),
+                RColorBrewer::brewer.pal(8, "Accent")))
+```
+
+
+
+Define themes
+
+```{r}
+tsne_theme = theme(aspect.ratio = 1,
+                   axis.text = element_blank(),
+                   axis.ticks = element_blank(), 
+                   axis.line = element_blank(),
+                   axis.title.x = element_text(size = 6, margin = margin(0,0,0,0)),
+                   axis.title.y = element_text(size = 6, margin = margin(0,0,0,0)),
+                   plot.background = element_blank(),
+                   panel.background = element_blank(),
+                   legend.key = element_blank(), 
+                   legend.key.size = unit(0.85, 'lines'),
+                   legend.justification = "center",
+                   legend.background = element_blank(),
+                   legend.position = "right", legend.title.align = 0, 
+                   legend.title = element_text(face = "bold", size = 6),
+                   legend.text = element_text(size = 5.5), 
+                   legend.box.spacing = unit(0.02, "lines"),
+                   panel.border = element_rect(colour = "black",fill = "transparent",
+                                               linetype = "solid", size = 0.5))
+de_theme = theme_bw()+
+  theme(aspect.ratio = 1,
+        legend.title = element_blank(),
+        legend.spacing = unit(0.04, "lines"),
+        legend.background = element_blank(),
+        plot.title = element_text(size = 11.5, face = "bold"),
+        legend.box.spacing = unit(0.02, "lines"),
+        legend.text = element_text(size = 6),
+        axis.text = element_text(colour = "black", size = 7),
+        axis.title = element_text(face = "bold", size = 8))
+
+theme_bar = theme_classic()+
+  theme(aspect.ratio = 1/1.5,
+        axis.text.x = element_text(colour = "black", size = 5.5, 
+                                   face = "bold", angle = 33, 
+                                   vjust = 1, hjust = 1),
+        axis.text.y = element_text(colour = "black", size = 4.7),
+        axis.title.x = element_blank(),
+        axis.title.y = element_text(size = 5.5),
+        legend.key = element_blank(), 
+        legend.key.size = unit(0.4, 'lines'),
+        legend.justification = "center",
+        legend.background = element_blank(),
+        legend.position = "right", legend.title.align = 0, 
+        legend.title = element_text(face = "bold", size = 5.5),
+        legend.text = element_text(size = 5.5), 
+        legend.box.spacing = unit(0.0025, "lines"),
+        plot.margin = unit(c(0,0.07,0,0.07),"lines"))
+```
+
+
+
+# Figure 1
+Load data
+
+```{r}
+load("./saved_data/10X/all_data_cl.RData")
+load("plots/10X/DE/de_lt_nlt_all_10X.RData")
+load("plots/10X/DE/de_treg_tmem_all_10X.RData")
+load("plots/SS2/DE/de_lt_nlt_all_SS2.RData")
+load("plots/SS2/DE/de_treg_tmem_all_SS2.RData")
+
+load("saved_data/SS2/sr_list_SS2.RData")
+load("plots/SS2/DE/de_lt_nlt_all_SS2.RData")
+load("plots/SS2/DE/de_treg_tmem_all_SS2.RData")
+```
+
+
+
+## Make plots
+t-SNE with all 10X
+
+```{r, fig.width=5, fig.height=2.75}
+plot_df = cbind(all_data_cl@dr$tsne@cell.embeddings, all_data_cl@meta.data)
+
+plot_df$isT = ifelse(plot_df$cl_ct, "Treg",
+                     ifelse(grepl("Tmem", plot_df$cl_ct), "Tmem", "Other"))
+
+plot_df$cell_type_sort_mod = as.character(plot_df$cell_type_sort)
+plot_df$cell_type_sort_mod[plot_df$cl_ct %in% c("NKT", "Undefined", "MitoStress")] = "Contamination"
+plot_df$cell_type_sort_mod = gsub("_", " ", plot_df$cell_type_sort_mod)
+plot_df$cell_type_sort_mod = factor(plot_df$cell_type_sort_mod, levels = c("Treg colon","Tmem colon",
+                                                                           "Treg skin","Tmem skin",
+                                                                           "Treg mLN","Tmem mLN",
+                                                                           "Treg bLN","Tmem bLN",
+                                                                           "Treg spleen","Tmem spleen", 
+                                                                           "Contamination"))
+
+plot_df = plot_df[sample(1:nrow(plot_df), nrow(plot_df), replace = F),]
+tsne_1b = ggplot(plot_df)+
+  geom_point(mapping = aes(x = tSNE_1, y = tSNE_2, colour = cell_type_sort_mod), 
+             size = 0.2, shape = 19)+
+  scale_colour_manual(values = c(sort_pal, "grey70"))+
+  guides(colour = guide_legend(title = "Cell Type and Tissue", ncol = 2,byrow = T,
+                               title.position = "top", 
+                               override.aes = list(size = 1.1)))+
+  tsne_theme
+
+
+plot_df$cl_allCells = as.character(plot_df$cl_allCells)
+plot_df$cl_allCells = gsub("_", " ", plot_df$cl_allCells)
+plot_df$cl_allCells = gsub("MitoStress", "Stress/Mt", plot_df$cl_allCells)
+plot_df$cl_allCells = factor(plot_df$cl_allCells, levels = c("Colon Treg", "Colon Tmem",
+                                                             "Skin", "LT Treg", "LT Tmem",
+                                                             "NKT", "Stress/Mt", "Undefined"))
+
+tsne_supsort = ggplot(plot_df)+
+  geom_point(mapping = aes(x = tSNE_1, y = tSNE_2, colour = cl_allCells), 
+             size = 0.2, shape = 19)+
+  scale_colour_manual(values = cl_allCells_pal)+
+  guides(colour = guide_legend(title = "Clusters", title.position = "top",
+                               override.aes = list(size = 1.1)))+
+  tsne_theme
+
+tsne_fig1_10X = list(tsne_1b = tsne_1b, tsne_supsort = tsne_supsort)
+save(tsne_fig1_10X, file = "FINAL_PLOTS/plot_repository/tsne_fig1_10X.RData")
+```
+
+
+
+tSNE without contaminant cells (re-run it here)
+
+```{r}
+cells = rownames(all_data_cl@meta.data)[!all_data_cl@meta.data$cl_allCells %in% c("NKT","Undefined","MitoStress")]
+sub_alldata = SubsetData(all_data_cl, cells.use = cells)
+
+sub_alldata <- NormalizeData(object = sub_alldata, normalization.method = "LogNormalize",
+                             scale.factor = 10000, display.progress = F)
+sub_alldata <- Seurat::ScaleData(object = sub_alldata, model.use = "negbinom", 
+                                 do.center = T, do.scale = F, use.umi = T)
+sub_alldata = Seurat::RunPCA(sub_alldata, pcs.compute = 50, pcs.print = NULL, 
+                             genes.print = 0, pc.genes = rownames(sub_alldata@data))
+PCElbowPlot(object = sub_alldata, num.pc = 50)
+sub_alldata = Seurat::RunTSNE(sub_alldata, dims.use = 1:30, seed.use = 1)
+
+plot_df = cbind(sub_alldata@dr$tsne@cell.embeddings, sub_alldata@meta.data)
+
+plot_df$isT = ifelse(plot_df$cl_ct, "Treg",
+                     ifelse(grepl("Tmem", plot_df$cl_ct), "Tmem", "Other"))
+
+plot_df$cell_type_sort = as.character(plot_df$cell_type_sort)
+plot_df$cell_type_sort = gsub("_", " ", plot_df$cell_type_sort)
+plot_df$cell_type_sort = factor(plot_df$cell_type_sort, levels = c("Treg colon",
+                                                                   "Tmem colon",
+                                                                   "Treg skin",
+                                                                   "Tmem skin",
+                                                                   "Treg mLN",
+                                                                   "Tmem mLN",
+                                                                   "Treg bLN",
+                                                                   "Tmem bLN",
+                                                                   "Treg spleen",
+                                                                   "Tmem spleen"))
+
+plot_df = plot_df[sample(1:nrow(plot_df), nrow(plot_df), replace = F),]
+tsne_1b_nocont = ggplot(plot_df)+
+  geom_point(mapping = aes(x = tSNE_1, y = tSNE_2, colour = cell_type_sort), 
+             size = 0.2, shape = 19)+
+  scale_colour_manual(values = c(sort_pal))+
+  guides(colour = guide_legend(title = "Cell Type and Tissue", ncol = 1, byrow = T,
+                               title.position = "top", 
+                               override.aes = list(size = 1.1)))+
+  tsne_theme
+
+save(tsne_1b_nocont, file = "FINAL_PLOTS/plot_repository/tsne_1b_nocont.RData")
+```
+
+
+
+tSNE SS2
+
+```{r}
+ss2_list_sup = list()
+for(n in c("mouse_colon", "mouse_skin")){
+  plot_df = cbind(sr_list[[n]]@dr$tsne@cell.embeddings, sr_list[[n]]@meta.data)
+  plot_df$tissue_cell = gsub(".", " ", as.character(plot_df$tissue_cell), fixed = T)
+  plot_df$tissue_cell = factor(plot_df$tissue_cell, levels = c("colon Tmem", "colon Treg",
+                                                               "skin Tmem", "skin Treg",
+                                                               "LN Tmem", "LN Treg",
+                                                               "spleen Tmem", "spleen Treg"))
+  
+  ss2_list_sup[[n]] = ggplot(plot_df)+
+  geom_point(mapping = aes(x = tSNE_1, y = tSNE_2, colour = tissue_cell), 
+             size = 0.25, shape = 19)+
+  scale_colour_manual(values = colours_mouse)+
+  guides(colour = guide_legend(title = "Cell Type and Tissue", ncol = 1, byrow = T,
+                               title.position = "top", 
+                               override.aes = list(size = 1.1)))+
+  tsne_theme
+}
+save(ss2_list_sup, file = "FINAL_PLOTS/plot_repository/ss2_list_sup.RData")
+```
+
+
+
+DE LT-NLT and Treg-Tmem - 10X
+
+```{r, fig.width=3.75, fig.height=3.7}
+# FUNCTIONS
+processDEresults = function(tiss, ct, thr = 0.25){
+  tiss$pct_diff = tiss$pct.2-tiss$pct.1
+  tiss$is_de = tiss$p_val_adj<=0.05 & abs(tiss$avg_logFC)>=thr
+  
+  ct$pct_diff = ct$pct.2-ct$pct.1
+  ct$is_de = ct$p_val_adj<=0.05 & abs(ct$avg_logFC)>=thr
+  
+  res = merge(tiss[,c(2,4,8,9)], ct[,c(2,4,8,9)], by = 1)
+  colnames(res) = c("Gene", "logFC_NLT.vs.LT", "pDiff_NLT.vs.LT", "isDE_NLT.vs.LT",
+                    "logFC_Treg.vs.Tmem", "pDiff_Treg.vs.Tmem", "isDE_Treg.vs.Tmem")
+  res$Gene = as.character(res$Gene)
+  res$col = ifelse(res$logFC_NLT.vs.LT>thr &
+                     res$logFC_Treg.vs.Tmem>thr,
+                   "NLT Treg",
+                   ifelse(res$logFC_NLT.vs.LT<(-thr) &
+                            res$logFC_Treg.vs.Tmem>thr,
+                          "LT Treg",
+                          ifelse(res$logFC_NLT.vs.LT>thr &
+                                   res$logFC_Treg.vs.Tmem<(-thr),
+                                 "NLT Tmem",
+                                 ifelse(res$logFC_NLT.vs.LT<(-thr) &
+                                          res$logFC_Treg.vs.Tmem<(-thr),
+                                        "LT Tmem", "Other"))))
+  res$col[!res$isDE_NLT.vs.LT | !res$isDE_Treg.vs.Tmem] = "Other"
+  res$col = factor(res$col, levels = c("NLT Treg","NLT Tmem","LT Treg",
+                                       "LT Tmem","Other"))
+  res$shap = ifelse((res$logFC_NLT.vs.LT<thr & res$logFC_NLT.vs.LT>(-thr)) |
+                      !res$isDE_NLT.vs.LT, "DE cell type", 
+                    ifelse((res$logFC_Treg.vs.Tmem<thr & res$logFC_Treg.vs.Tmem>(-thr)) |
+                             !res$isDE_Treg.vs.Tmem, "DE tissue",
+                           "DE both"))
+  return(res)
+}
+plotDE = function(de_tab, col_pal, title_plt, text_df, 
+                  xlim_plt=NULL, ylim_plt=NULL){
+  de_tab = de_tab[order(de_tab$col, decreasing = T),]
+  plt = ggplot(de_tab, aes(x = logFC_NLT.vs.LT, y = logFC_Treg.vs.Tmem, 
+                           colour = col, shape = shap))+
+    geom_point(size = 0.8)+
+    ggrepel::geom_text_repel(data = text_df, segment.colour = "black", 
+                             colour = "black", min.segment.length = 0,
+                             fontface = "bold", size = 2.35, alpha = 1,
+                             mapping = aes(x = logFC_NLT.vs.LT, 
+                                           y = logFC_Treg.vs.Tmem,
+                                           label = Gene))+
+    scale_colour_manual(values = col_pal)+
+    scale_shape_manual(values = c(19, 4, 1))+
+    guides(colour = guide_legend(override.aes = list(size = 1.1)),
+           shape = guide_legend(override.aes = list(size = 1.1)))+
+    labs(x = "Average logFC NLT vs LT", y = "Average logFC Treg vs Tmem",
+         colour = "", shape = "", title = title_plt)+
+    de_theme
+  
+  if(!is.null(xlim_plt) & !is.null(ylim_plt)){
+    plt = plt + coord_cartesian(xlim = xlim_plt, ylim = ylim_plt)
+  }
+  
+  return(plt)
+}
+
+
+# COLON
+colon_all = processDEresults(de_lt_nlt_all$colon_mLN_spleen,
+                             de_treg_tmem_all$colon_mLN_spleen, thr = 0.25)
+
+genes_top = c("Il10", "Rora", "Ramp3", "Tcf7", "Sell", "Ikzf2","Cxcr6","Bcl2",
+              "Gzmb","Slamf6", "Gpr83", "Nrp1","Ccr2","Tnfaip3","Tnfrsf9","Tnfrsf4",
+              "Itga4", "Cd83","Vps37b")
+text_df = colon_all[colon_all$Gene %in% genes_top,]
+
+colon_de = plotDE(colon_all, de_colon_nlt_pal, "Colon vs LT", text_df,
+                  xlim = c(-2.1,3.1), ylim = c(-2,1.7))
+
+# SKIN
+skin_all = processDEresults(de_lt_nlt_all$skin_bLN_spleen,
+                            de_treg_tmem_all$skin_bLN_spleen)
+
+genes_top = c("Il10", "Rora", "Ramp3", "Tcf7", "Sell","Ikzf2", "Cxcr6","Bcl2","Pim1",
+              "Gzmb", "Pfkp", "Slamf6", "Gpr83", "Nrp1","Ccr2","Tnfaip3","Odc1",
+              "Tnfrsf9","Tnfrsf4","Itga4", "Cd83", "Vps37b", "Id2", "Il4ra", "Ly6c1")
+text_df = skin_all[skin_all$Gene %in% genes_top,]
+
+skin_de = plotDE(skin_all, de_skin_nlt_pal, "Skin vs LT", text_df,
+                 xlim = c(-2.1,3.1), ylim = c(-2,1.7))
+
+de_fig1 = list(colon_de = colon_de, skin_de = skin_de)
+save(de_fig1, file = "FINAL_PLOTS/plot_repository/de_fig1.RData")
+
+de_summary_10x = list(colon_all = colon_all, skin_all = skin_all)
+save(de_summary_10x, file = "plots/10X/DE/de_summary_10x.RData")
+```
+
+
+
+DE LT-NLT and Treg-Tmem - SS2
+
+```{r, fig.width=3.75, fig.height=3.7}
+# COLON
+colon_all_ss2 = processDEresults(de_lt_nlt_all_ss2$mouse_colon,
+                                 de_treg_tmem_all_ss2$mouse_colon)
+
+genes_top = c("Il10", "Rora", "Ramp3", "Tcf7", "Sell", "Ikzf2","Cxcr6","Bcl2",
+              "Gzmb","Slamf6", "Gpr83", "Nrp1","Ccr2","Tnfaip3","Tnfrsf9","Tnfrsf4",
+              "Itga4", "Cd83","Vps37b")
+text_df = colon_all_ss2[colon_all_ss2$Gene %in% genes_top,]
+
+colon_de_ss2 = plotDE(colon_all_ss2, de_colon_nlt_pal, "Colon vs LT", text_df,
+                      xlim = c(-2.1,3.2), ylim = c(-1.5, 2.5))
+
+# SKIN
+skin_all_ss2 = processDEresults(de_lt_nlt_all_ss2$mouse_skin,
+                                de_treg_tmem_all_ss2$mouse_skin)
+
+genes_top = c("Il10", "Rora", "Ramp3", "Tcf7", "Sell", "Ikzf2", "Cxcr6","Bcl2","Gzmb", "Pfkp",
+              "Slamf6", "Gpr83", "Nrp1", "Ccr2","Tnfaip3","Tnfrsf9","Tnfrsf4","Itga4",
+              "Cd83", "Vps37b", "Id2", "Il4ra", "Ly6c1", "Pim1", "Odc1")
+text_df = skin_all_ss2[skin_all_ss2$Gene %in% genes_top,]
+
+skin_de_ss2 = plotDE(skin_all_ss2, de_skin_nlt_pal, "Skin vs LT", text_df,
+                     xlim = c(-2, 3.7), ylim = c(-2.2, 2))
+
+de_supfig1_SS2 = list(colon_de_ss2 = colon_de_ss2, skin_de_ss2 = skin_de_ss2)
+save(de_supfig1_SS2, file = "FINAL_PLOTS/plot_repository/de_supfig1_SS2.RData")
+```
+
+
+
+Confusion Matrix
+
+```{r, fig.width=4, fig.height=3.5}
+plot_df = cbind(all_data_cl@dr$tsne@cell.embeddings, all_data_cl@meta.data)
+plot_df$cl_allCells = as.character(plot_df$cl_allCells)
+plot_df$cl_allCells = gsub("_", " ", plot_df$cl_allCells)
+plot_df$cl_allCells = gsub("MitoStress", "Stress/Mt", plot_df$cl_allCells)
+plot_df$cl_allCells = factor(plot_df$cl_allCells, levels = c("Colon Treg", "Colon Tmem",
+                                                             "Skin", "LT Treg", "LT Tmem",
+                                                             "NKT", "Stress/Mt", "Undefined"))
+
+plot_df$cell_type_sort = as.character(plot_df$cell_type_sort)
+plot_df$cell_type_sort = gsub("_", " ", plot_df$cell_type_sort)
+plot_df$cell_type_sort = factor(plot_df$cell_type_sort, levels = c("Treg colon","Tmem colon",
+                                                                   "Treg skin","Tmem skin",
+                                                                   "Treg mLN","Tmem mLN",
+                                                                   "Treg bLN","Tmem bLN",
+                                                                   "Treg spleen","Tmem spleen"))
+df_cm = data.frame(table(plot_df$cell_type_sort, plot_df$cl_allCells))
+colnames(df_cm) = c("Sorted", "Clustered", "n")
+df_cm$Sorted = factor(df_cm$Sorted, levels = rev(levels(df_cm$Sorted)))
+for(i in unique(df_cm$Sorted)){
+  df_cm$frac[df_cm$Sorted==i] = df_cm$n[df_cm$Sorted==i]/sum(df_cm$n[df_cm$Sorted==i])*100
+}
+df_cm$white = ifelse(df_cm$frac>75, "white", "black")
+
+conf_mat = ggplot(df_cm, aes(x = Clustered, y = Sorted, fill = frac, label = n))+
+  geom_tile()+ geom_text(mapping = aes(colour = white), size = 1.6, show.legend = F)+
+  scale_x_discrete(position = "top")+
+  scale_fill_gradientn(colors = RColorBrewer::brewer.pal(n = 9, 
+                                                         name = "PuBuGn")[-c(9,8)])+
+  guides(fill = guide_colourbar(title = "% of Sorted", barwidth = unit("0.4", "lines")))+
+  scale_colour_manual(values = c("black", "grey95"))+
+  theme_classic()+
+  theme(axis.text = element_text(colour = "black", size = 5.8),
+        axis.text.x.top = element_text(angle = 33, hjust = 0, vjust = 0,
+                                       colour = "black"),
+        axis.title = element_text(face = "bold", size = 6.2),
+        legend.title = element_text(size = 6.2),
+        legend.text = element_text(size = 5),
+        axis.ticks = element_blank(),
+        axis.line = element_blank(),
+        legend.background = element_blank(),
+        legend.box.spacing = unit(0.02, "lines"),
+        aspect.ratio = 1/1.15)
+save(conf_mat, file = "FINAL_PLOTS/plot_repository/conf_mat_supp.RData")
+```
+
+
+
+## Assemble Figures
+Figure 1
+
+```{r, fig.width=7.2, fig.height=5.8}
+load("FINAL_PLOTS/plot_repository/tsne_fig1_10X.RData")
+load("FINAL_PLOTS/plot_repository/de_fig1.RData")
+load("FINAL_PLOTS/plot_repository/tsne_1b_nocont.RData")
+
+fig_top = cowplot::plot_grid(NULL, tsne_1b_nocont, 
+                             ncol = 2, rel_widths = c(1.05,1), labels = c("A","B"))
+fig_bot = cowplot::plot_grid(NULL, de_fig1$colon_de, NULL, de_fig1$skin_de, NULL,
+                          ncol = 5, rel_widths = c(0.04, 1, 0.05, 1, 0.04))
+
+fig1 = cowplot::plot_grid(fig_top, fig_bot, nrow = 2, labels = c("","C"))
+
+ggsave("FINAL_PLOTS/Figures/Figure01.pdf", fig1,
+       device = "pdf", height = 5.8, width = 7.3, paper = "a4", useDingbats = F)
+```
+
+
+
+Supplementary Figure 1 (add sorting later)
+
+```{r, fig.width=7.6, fig.height=3}
+load("FINAL_PLOTS/plot_repository/qc_10X_all.RData")
+load("FINAL_PLOTS/plot_repository/SS2_qc_violin_list.RData")
+load("FINAL_PLOTS/plot_repository/tsne_fig1_10X.RData")
+load("FINAL_PLOTS/plot_repository/conf_mat_supp.RData")
+
+fig_mid = plot_grid(tsne_fig1_10X$tsne_supsort, conf_mat, ncol = 2, labels = c("C", "D"))
+fig_bot = plot_grid(qc_violin_list$mouse_colon, qc_violin_list$mouse_skin, ncol = 2, labels = c("E", "F"))
+fig_scrna = plot_grid(gene_umi_hex_sample, fig_mid, fig_bot, nrow = 3, labels = "B", rel_heights = c(1, 0.62, 1))
+
+ggsave("FINAL_PLOTS/Figures/SupplementaryFigure01.pdf", fig_scrna,
+       device = "pdf", height = 7.6, width = 7.6, paper = "a4", useDingbats = F)
+```
+
+
+
+Supplementary Figure 2
+
+```{r}
+load("FINAL_PLOTS/plot_repository/ss2_list_sup.RData")
+load("FINAL_PLOTS/plot_repository/de_supfig1_SS2.RData")
+
+fig_top = cowplot::plot_grid(ss2_list_sup$mouse_colon, ss2_list_sup$mouse_skin, 
+                             ncol = 2, labels = c("A","B"))
+fig_bot = cowplot::plot_grid(NULL, de_supfig1_SS2$colon_de_ss2, NULL, de_supfig1_SS2$skin_de_ss2, NULL,
+                          ncol = 5, rel_widths = c(0.04, 1, 0.05, 1, 0.04))
+
+fig1 = cowplot::plot_grid(fig_top, fig_bot, nrow = 2, labels = c("","C"))
+
+ggsave("FINAL_PLOTS/Figures/SupplementaryFigure02.pdf", fig1,
+       device = "pdf", height = 5.8, width = 7.2, paper = "a4", useDingbats = F)
+```
+
+
+
+# Figure 2
+Load data
+
+```{r}
+load("saved_data/10X/10X_sub_data_list.RData")
+load("plots/10X/DE/de_list_subpop.RData")
+load("plots/10X/DE/de_summary_10x.RData")
+load("saved_data/10X/all_data_cl.RData")
+load("plots/10X/DE/pairwise_subcl_tiss_list.RData")
+load("plots/SS2/DE/de_colon_skin_ss2.RData")
+load("saved_data/SS2/colon_skin_data.RData")
+
+probs = read.csv("plots/10X/LR/probs_test_data_TregSkin.csv", header= T, row.names = 1)
+labs = read.csv("plots/10X/LR/preds_test_data_TregSkin.csv", header= T, row.names = 1)
+labs_meta_10x = read.csv("plots/10X/LR/preds_metadata_Treg_10X_noStress.csv", header= T, row.names = 1)
+labs_meta_ss2 = read.csv("plots/10X/LR/preds_metadata_Treg_SS2_allTreg10X_noStress.csv", header= T, row.names = 1)
+```
+
+
+
+## Make plots
+tSNE plots for each tissue (Treg) - no stress cells
+
+```{r, fig.width=5.5, fig.height=4.15}
+sub_tsne_list = list()
+for(n in names(sub_data_noStress_list)[c(1,3,5,7,11)]){
+  plot_df = cbind(sub_data_noStress_list[[n]]@dr$tsne@cell.embeddings, sub_data_noStress_list[[n]]@meta.data)
+  plot_df = merge(plot_df, all_data_cl@meta.data[,c("cl_annot", "tissue_sp")], by = 0)
+  
+  plot_df$cl_annot = factor(plot_df$cl_annot)
+  levels(plot_df$cl_annot) = list("Treg suppressive" = "Treg_suppressive", "Treg NLT" = "Treg_NLT",
+                                  "Treg LT-like" = "Treg_LTlike", "Treg NLT-like" = "Treg_NLTlike",
+                                  "eTreg" = "Treg_effector", "Treg Stat1" = "Treg_Stat1",
+                                  "cTreg" = "Treg_lymphoid", "Tmem NLT" = "Tmem_NLT")
+  
+  if(n=="Skin") n = "Skin (Treg and Tmem)"
+  plot_df = plot_df[sample(1:nrow(plot_df), nrow(plot_df), replace = F),]
+  sub_tsne_list[[n]] = ggplot(plot_df)+
+    geom_point(mapping = aes(x = tSNE_1, y = tSNE_2, colour = cl_annot), 
+               size = 0.1, shape = 19)+
+    scale_colour_manual(values = c(cl_treg_pal), drop = FALSE)+
+    guides(colour = guide_legend(title = "Subpopulation", byrow = T,
+                                 title.position = "top", ncol = 2,
+                                 override.aes = list(size = 1.6)))+
+    ggtitle(gsub("_", " ", n))+
+    tsne_theme+theme(legend.title = element_text(size = 7),
+                     legend.text = element_text(size = 6),
+                     plot.title = element_text(size = 8.25, hjust = 0, margin = margin(0,0,2,0)),
+                     legend.box.spacing = unit(1, "lines"))
+}
+save(sub_tsne_list, file = "FINAL_PLOTS/plot_repository/sub_tsne_list.RData")
+```
+
+
+
+tSNE plots for each tissue (Tmem) - no stress cells
+
+```{r, fig.width=5.5, fig.height=4.15}
+sub_tsne_list_Tmem = list()
+for(n in names(sub_data_noStress_list)[c(2,4,6,8,11)]){
+  plot_df = cbind(sub_data_noStress_list[[n]]@dr$tsne@cell.embeddings, sub_data_noStress_list[[n]]@meta.data)
+  plot_df = merge(plot_df, all_data_cl@meta.data[,c("cl_annot", "tissue_sp")], by = 0)
+  
+  plot_df$cl_annot = factor(plot_df$cl_annot)
+  levels(plot_df$cl_annot) = rev(list("Tmem LT" = "Tmem_lymphoid", "Tmem LT" = "Tmem_lymphoidResident",
+                                      "Tmem Tfh" = "Tmem_activated", "Tmem Th1" = "Tmem_lymphoidEgressing",
+                                      "Tmem LT-like" = "Tmem_LTlike", "Tmem Cxcl10" = "Tmem_Cxcl10", 
+                                      "Tmem cycling" = "Tmem_cycling", "Tmem Th1" = "Tmem_Th1", 
+                                      "Tmem Th17" = "Tmem_Th17", "Tmem Th2" = "Tmem_Th2"))
+  
+  if(n=="Skin") n = "Skin (Treg and Tmem)"
+  plot_df = plot_df[sample(1:nrow(plot_df), nrow(plot_df), replace = F),]
+  sub_tsne_list_Tmem[[n]] = ggplot(plot_df)+
+    geom_point(mapping = aes(x = tSNE_1, y = tSNE_2, colour = cl_annot), 
+               size = 0.1, shape = 19)+
+    scale_colour_manual(values = c(cl_tmem_pal), drop = FALSE)+
+    guides(colour = guide_legend(title = "Subpopulation", byrow = T,
+                                 title.position = "top", ncol = 1,
+                                 override.aes = list(size = 1.6)))+
+    ggtitle(gsub("_", " ", n))+
+    tsne_theme+theme(legend.title = element_text(size = 7),
+                     legend.text = element_text(size = 6),
+                     plot.title = element_text(size = 8.25, hjust = 0, margin = margin(0,0,2,0)),
+                     legend.box.spacing = unit(1, "lines"))
+}
+save(sub_tsne_list_Tmem, file = "FINAL_PLOTS/plot_repository/sub_tsne_list_Tmem.RData")
+```
+
+
+
+Ratio of NLT/LT Tmem genes/pop
+
+```{r, fig.height=1.8, fig.width=2.3}
+colon_treg_genes = de_summary_10x$colon_all$Gene[de_summary_10x$colon_all$logFC_NLT.vs.LT>=.25 &
+                                                   de_summary_10x$colon_all$isDE_NLT.vs.LT &
+                                                   de_summary_10x$colon_all$logFC_Treg.vs.Tmem<.25]
+skin_treg_genes = de_summary_10x$skin_all$Gene[de_summary_10x$skin_all$logFC_NLT.vs.LT>=.25 &
+                                                 de_summary_10x$skin_all$isDE_NLT.vs.LT &
+                                                 de_summary_10x$skin_all$logFC_Treg.vs.Tmem<.25]
+nlt_treg_genes = union(skin_treg_genes, colon_treg_genes)
+
+clt_treg_genes = de_summary_10x$colon_all$Gene[de_summary_10x$colon_all$logFC_NLT.vs.LT<=(-.25) &
+                                                   de_summary_10x$colon_all$isDE_NLT.vs.LT &
+                                                   de_summary_10x$colon_all$logFC_Treg.vs.Tmem<.25]
+slt_treg_genes = de_summary_10x$skin_all$Gene[de_summary_10x$skin_all$logFC_NLT.vs.LT<=(-.25) &
+                                                 de_summary_10x$skin_all$isDE_NLT.vs.LT &
+                                                 de_summary_10x$skin_all$logFC_Treg.vs.Tmem<.25]
+lt_treg_genes = union(slt_treg_genes, clt_treg_genes)
+
+
+genes_df = data.frame()
+for(n in names(de_list_subpop)[c(2,21,15,19)]){
+  cell_type_sort = strsplit(n, "res")[[1]][1]
+  cell_type_sort = substr(cell_type_sort, 1, nchar(cell_type_sort)-1)
+  sub_df = data.frame("cell_type_sort" = rep(cell_type_sort, length(unique(de_list_subpop[[n]]$cluster))),
+                      "cluster" = unique(de_list_subpop[[n]]$cluster),
+                      "n" = rep(0, length(unique(de_list_subpop[[n]]$cluster))), stringsAsFactors = F)
+  for(cl in unique(de_list_subpop[[n]]$cluster)){
+    de_cl = de_list_subpop[[n]][de_list_subpop[[n]]$cluster==cl,]
+    genes_cl = as.character(de_cl$V2[de_cl$avg_logFC>=0.25 & de_cl$p_val_adj<=0.05])
+    
+    sub_df$n[sub_df$cluster==cl] = log2(length(intersect(genes_cl, nlt_treg_genes))/length(intersect(genes_cl, lt_treg_genes)))
+  }
+  genes_df = rbind(genes_df, sub_df)
+}
+
+genes_df$cell_type_sort = gsub("_", " ", genes_df$cell_type_sort)
+genes_df$cell_type_sort = factor(genes_df$cell_type_sort, levels = c("Tmem spleen", "Tmem bLN", "Tmem mLN", 
+                                                                     "Tmem colon"))
+
+genes_df$cluster = as.character(genes_df$cluster)
+temp = factor(paste0(genes_df$cell_type_sort, genes_df$cluster), levels = unique(paste0(genes_df$cell_type_sort, genes_df$cluster)))
+levels(temp) = list("Tmem Tfh" = "Tmem spleen2", "Tmem LT" = "Tmem spleen0", "Tmem Th1" = "Tmem spleen1",
+                    "Tmem Th17" = "Tmem bLN3", "Tmem Tfh" = "Tmem bLN2", "Tmem LT" = "Tmem bLN0", 
+                    "Tmem Th1" = "Tmem bLN1", "Tmem Th17" = "Tmem bLN3", "Stress/low qual" = "Tmem mLN3", 
+                    "Tmem Th1" = "Tmem mLN1", "Tmem LT" = "Tmem mLN2",
+                    "Tmem Tfh" = "Tmem mLN0",
+                    "Tmem Cxcl10" = "Tmem mLN4", "Tmem Th17" = "Tmem mLN5", "Tmem cycling" = "Tmem mLN6",
+                    "Tmem LT-like" = "Tmem colon3", "Stress/low qual" = "Tmem colon2", "Tmem Th1" = "Tmem colon1",
+                    "Tmem Th17" = "Tmem colon0","Stress/low qual" = "Tmem colon4", "Tmem Th2" = "Tmem colon5")
+genes_df$cluster = temp
+genes_df$cluster = factor(genes_df$cluster, levels = unique(genes_df$cluster)[c(3,1,8,7,5,6,2,9,4)])
+genes_df = genes_df[!grepl("Stress", genes_df$cluster),] # remove Stress cells
+
+de_rat_bar_Tmem = ggplot(genes_df, aes(x = cell_type_sort, fill = cluster, y = n))+
+  geom_bar(stat = "identity", position = position_dodge2(preserve = "single"))+
+  scale_fill_manual(values = cl_tmem_pal)+
+  labs(y = "log2(NLT/LT)", fill = "Subpopulations")+
+  theme_bar+
+  theme(plot.margin = unit(c(0.6,0.27,0.2,0.27),"lines"))
+save(de_rat_bar_Tmem, file = "FINAL_PLOTS/plot_repository/de_rat_bar_Tmem.RData")
+```
+
+
+
+Proportions barplot - Tmem
+
+```{r, fig.height=1.8, fig.width=2.3}
+plot_df = all_data_cl@meta.data[,c("cl_annot", "tissue_sp")]
+plot_df = plot_df[!grepl("stress", plot_df$cl_annot),] # remove Stress cells
+plot_df = table(plot_df[plot_df$cl_annot %in% unique(plot_df$cl_annot)[grepl("Tmem", unique(plot_df$cl_annot))],])
+plot_df = data.frame(t(t(plot_df)/colSums(plot_df))*100)
+plot_df = plot_df[plot_df$tissue_sp!="skin" & plot_df$cl_annot!="Tmem_NLT",]
+
+levels(plot_df$cl_annot) = rev(list("Tmem LT" = "Tmem_lymphoid", "Tmem LT" = "Tmem_lymphoidResident",
+                                    "Tmem Tfh" = "Tmem_activated", "Tmem Th1" = "Tmem_lymphoidEgressing",
+                                    "Tmem LT-like" = "Tmem_LTlike", "Stress/low qual" = "Tmem_stress",
+                                    "Tmem Cxcl10" = "Tmem_Cxcl10", "Tmem cycling" = "Tmem_cycling",
+                                    "Tmem Th1" = "Tmem_Th1","Tmem Th2" = "Tmem_Th2", "Tmem Th17" = "Tmem_Th17"))
+
+plot_df$tissue_sp = factor(paste("Tmem", plot_df$tissue_sp), 
+                           levels = c("Tmem spleen", "Tmem bLN", "Tmem mLN", "Tmem colon"))
+
+prop_bars_Tmem = ggplot(plot_df, aes(x = tissue_sp, fill = cl_annot, y = Freq))+
+  geom_bar(stat = "identity")+
+  scale_y_continuous(expand = c(0,0))+
+  scale_fill_manual(values = cl_tmem_pal) + 
+  guides(fill = guide_legend(reverse=T))+
+  labs(y = "%", fill = "Subpopulations")+
+  theme_bar+
+  theme(plot.margin = unit(c(0.6,0.27,0.2,0.27),"lines"))
+save(prop_bars_Tmem, file = "FINAL_PLOTS/plot_repository/prop_bars_Tmem.RData")
+```
+
+
+
+Proportions barplot - Treg
+
+```{r, fig.height=1.8, fig.width=2.3}
+plot_df = all_data_cl@meta.data[,c("cl_annot", "tissue_sp")]
+plot_df = plot_df[!grepl("stress", plot_df$cl_annot),] # remove Stress cells
+plot_df = table(plot_df[plot_df$cl_annot %in% unique(plot_df$cl_annot)[grepl("Treg", unique(plot_df$cl_annot))],])
+plot_df = data.frame(t(t(plot_df)/colSums(plot_df))*100)
+
+levels(plot_df$cl_annot) = list("Treg suppressive" = "Treg_suppressive", "Treg NLT" = "Treg_NLT",
+                                "Treg LT-like" = "Treg_LTlike", "Treg NLT-like" = "Treg_NLTlike",
+                                "eTreg" = "Treg_effector","Treg Stat1" = "Treg_Stat1",
+                                "cTreg" = "Treg_lymphoid", "Tmem NLT" = "Tmem_NLT", 
+                                "Stress/low qual" = "lowQuality","Stress/low qual" = "Treg_stress")
+
+plot_df = plot_df[plot_df$tissue_sp!="skin",]
+
+plot_df$tissue_sp = factor(paste("Treg", plot_df$tissue_sp), 
+                           levels = c("Treg spleen", "Treg bLN", "Treg mLN", "Treg colon"))
+
+
+prop_bars = ggplot(plot_df, aes(x = tissue_sp, fill = cl_annot, y = Freq))+
+  geom_bar(stat = "identity")+
+  scale_y_continuous(expand = c(0,0))+
+  scale_fill_manual(values = cl_treg_pal)+
+  labs(y = "%", fill = "Subpopulations")+
+  theme_bar
+save(prop_bars, file = "FINAL_PLOTS/plot_repository/prop_bars.RData")
+```
+
+
+
+Ratio of NLT/LT Treg genes/pop - Treg
+
+```{r, fig.height=1.8, fig.width=2.3}
+colon_treg_genes = de_summary_10x$colon_all$Gene[de_summary_10x$colon_all$logFC_NLT.vs.LT>=.25 &
+                                                   de_summary_10x$colon_all$isDE_NLT.vs.LT &
+                                                   de_summary_10x$colon_all$logFC_Treg.vs.Tmem>(-.25)]
+skin_treg_genes = de_summary_10x$skin_all$Gene[de_summary_10x$skin_all$logFC_NLT.vs.LT>=.25 &
+                                                 de_summary_10x$skin_all$isDE_NLT.vs.LT &
+                                                 de_summary_10x$skin_all$logFC_Treg.vs.Tmem>(-.25)]
+nlt_treg_genes = union(skin_treg_genes, colon_treg_genes)
+
+clt_treg_genes = de_summary_10x$colon_all$Gene[de_summary_10x$colon_all$logFC_NLT.vs.LT<=(-.25) &
+                                                   de_summary_10x$colon_all$isDE_NLT.vs.LT &
+                                                   de_summary_10x$colon_all$logFC_Treg.vs.Tmem>(-.25)]
+slt_treg_genes = de_summary_10x$skin_all$Gene[de_summary_10x$skin_all$logFC_NLT.vs.LT<=(-.25) &
+                                                 de_summary_10x$skin_all$isDE_NLT.vs.LT &
+                                                 de_summary_10x$skin_all$logFC_Treg.vs.Tmem>(-.25)]
+lt_treg_genes = union(slt_treg_genes, clt_treg_genes)
+
+
+genes_df = data.frame()
+for(n in names(de_list_subpop)[c(1,4,11,17, 20)]){
+  cell_type_sort = strsplit(n, "res")[[1]][1]
+  cell_type_sort = substr(cell_type_sort, 1, nchar(cell_type_sort)-1)
+  sub_df = data.frame("cell_type_sort" = rep(cell_type_sort, length(unique(de_list_subpop[[n]]$cluster))),
+                      "cluster" = unique(de_list_subpop[[n]]$cluster),
+                      "n" = rep(0, length(unique(de_list_subpop[[n]]$cluster))), stringsAsFactors = F)
+  for(cl in unique(de_list_subpop[[n]]$cluster)){
+    de_cl = de_list_subpop[[n]][de_list_subpop[[n]]$cluster==cl,]
+    genes_cl = as.character(de_cl$V2[de_cl$avg_logFC>=0.25 & de_cl$p_val_adj<=0.05])
+    
+    sub_df$n[sub_df$cluster==cl] = log2(length(intersect(genes_cl, nlt_treg_genes))/length(intersect(genes_cl, lt_treg_genes)))
+  }
+  genes_df = rbind(genes_df, sub_df)
+}
+genes_df = genes_df[-c(15,17),]
+
+genes_df$cell_type_sort = gsub("_", " ", genes_df$cell_type_sort)
+genes_df$cell_type_sort = gsub("Skin", "Treg skin", genes_df$cell_type_sort)
+genes_df$cell_type_sort = factor(genes_df$cell_type_sort, levels = c("Treg spleen", "Treg bLN", "Treg mLN", 
+                                                                     "Treg colon", "Treg skin"))
+
+genes_df$cluster = as.character(genes_df$cluster)
+temp = factor(paste0(genes_df$cell_type_sort, genes_df$cluster), levels = unique(paste0(genes_df$cell_type_sort, genes_df$cluster)))
+levels(temp) = c("Treg spleen2" = "Treg NLT-like", "Treg spleen0" = "cTreg", "Treg spleen1" = "eTreg",
+                 "Treg bLN3" = "eTreg", "Treg bLN2" = "Treg NLT-like", "Treg bLN0" = "cTreg", "Treg bLN1" = "Treg Stat1",
+                 "Treg mLN0" = "cTreg", "Treg mLN1" = "eTreg", "Treg mLN2" = "Treg NLT-like", 
+                 "Treg colon2" = "Treg LT-like", "Treg colon3" = "Stress/low qual", "Treg colon1" = "Treg NLT",
+                 "Treg colon0" = "Treg suppressive", "Treg skin2" = "Treg NLT")
+genes_df$cluster = temp
+genes_df = genes_df[c(2,3,1,6,7,4,5,8:15),]
+genes_df$cluster = factor(genes_df$cluster, levels = unique(genes_df$cluster)[c(1,4,2,3,5:8)])
+genes_df = genes_df[!grepl("Stress", genes_df$cluster),] # remove Stress cells
+
+de_rat_bar = ggplot(genes_df, aes(x = cell_type_sort, fill = cluster, y = n))+
+  geom_bar(stat = "identity", position = position_dodge2(preserve = "single"))+
+  scale_fill_manual(values = cl_treg_pal, breaks = rev(c("Stress/low qual", "cTreg", "Treg Stat1", "eTreg", 
+                                                         "Treg NLT-like", "Treg LT-like", "Treg NLT", 
+                                                         "Treg suppressive")))+
+  labs(y = "log2(NLT/LT)", fill = "Subpopulations")+
+  theme_bar
+save(de_rat_bar, file = "FINAL_PLOTS/plot_repository/de_rat_bar.RData")
+```
+
+
+
+Plot probabilities
+
+```{r, fig.height=3, fig.width=3}
+skin_Treg = rownames(all_data_cl@meta.data)[all_data_cl@meta.data$cl_tiss=="Treg_NLT.in.skin"]
+
+plot_df = merge(probs, labs, by = 0)
+plot_df[,1] = skin_Treg[as.numeric(plot_df$Row.names)+1]
+
+hc = hclust(dist(plot_df[,2:5]), method = "ward.D2")
+plot_df[,1] = factor(plot_df[,1], levels = plot_df[,1][hc$order])
+colnames(plot_df) = gsub("_", " ", colnames(plot_df))
+colnames(plot_df)[colnames(plot_df)=="Treg LTlike"] = "Treg LT-like" 
+colnames(plot_df)[colnames(plot_df)=="Treg stress"] = "Stress/low qual" 
+plot_df$X0 = gsub("_", " ", plot_df$X0)
+plot_df$X0[plot_df$X0=="Treg LTlike"] = "Treg LT-like" 
+plot_df$X0[plot_df$X0=="Treg stress"] = "Stress/low qual" 
+plot_df$X0 = factor(plot_df$X0, levels = unique(plot_df$X0)[c(2,1,4,3)])
+
+plot_df1 = reshape2::melt(plot_df[,1:5])
+plot_df1$variable = factor(plot_df1$variable, levels = levels(plot_df$X0))
+vals_heat = ggplot(plot_df1, aes(x = variable, y = Row.names, fill = value))+
+  geom_tile()+
+  labs(x = "Colon Treg Class", y = "Skin Treg Cells", fill = "Assignment\nProbability")+
+  scale_fill_viridis_c(limits = c(0,1), guide = guide_colourbar(barwidth = 0.4, barheight = 4))+
+  scale_x_discrete(expand = c(0,0))+
+  theme_classic()+
+  theme(axis.text.y = element_blank(),
+        axis.line = element_blank(),
+        axis.ticks.y = element_blank(),
+        legend.title = element_text(size = 5.5, face = "bold"),
+        legend.text = element_text(size = 4.75),
+        axis.title = element_text(size = 5.5, face = "bold"),
+        axis.text.x = element_text(size = 5.5, angle = 90, colour = "black",
+                                   hjust = 1, vjust = 0.5),
+        legend.background = element_blank(),
+        plot.margin = unit(c(0, 0, 0, 0), "cm"),
+        legend.margin = margin(0,0,0,0),
+        legend.box.margin = margin(0,0,0,0),
+        aspect.ratio = 2/1)
+
+class_heat = ggplot(plot_df[,c(1,6)], aes(x = "Attributed\nLabel", y = Row.names, fill = X0))+
+  geom_tile()+
+  labs(x = " ", fill = "Predicted\nLabel")+
+  scale_x_discrete(expand = c(0,0))+
+  scale_fill_manual(values = cl_treg_pal)+
+  theme_classic()+
+  theme(axis.text = element_blank(),
+        axis.title.y = element_blank(),
+        axis.line = element_blank(),
+        axis.ticks = element_blank(),
+        legend.title = element_text(size = 5.5, face = "bold"),
+        legend.text = element_text(size = 4.75),
+        axis.title = element_text(size = 5.5, face = "bold"),
+        legend.background = element_blank(),
+        legend.key.size = unit(0.3, "lines"),
+        legend.margin = margin(0,0,0,0),
+        legend.box.margin = margin(0,0,0,0),
+        plot.margin = unit(c(0, 0, 0, 0), "cm"))
+
+leg1 = get_legend(vals_heat)
+leg2 = get_legend(class_heat)
+legends_heat = plot_grid(NULL, leg1, NULL, leg2, nrow = 4, rel_heights = c(0.1, 1, 0.1, 1), align = "hv")
+
+lr_probs_fig = (vals_heat+theme(legend.position = "none") + class_heat + theme(legend.position = "none") + plot_spacer() + legends_heat) + plot_layout(widths = c(0.7, 0.1, 0.01, 0.4), ncol = 4)
+save(lr_probs_fig, file = "FINAL_PLOTS/plot_repository/lr_probs_fig.RData")
+```
+
+
+
+Plot labels confusion matrix - 10X
+
+```{r, fig.height=3, fig.width=2.2}
+tab_10x = table(labs_meta_10x[,c("cl_tiss", "labs")])
+plot_df = reshape2::melt(tab_10x)
+plot_df$perc = reshape2::melt(tab_10x/rowSums(tab_10x)*100)$value
+plot_df$cluster = unlist(lapply(strsplit(as.character(plot_df$cl_tiss), ".in."), function(x) x[1]))
+plot_df$tissue = unlist(lapply(strsplit(as.character(plot_df$cl_tiss), ".in."), function(x) x[2]))
+plot_df$tissue = factor(plot_df$tissue, levels = rev(c("spleen", "bLN", "mLN", "skin", "colon")))
+plot_df$labs = factor(plot_df$labs)
+levels(plot_df$labs) = list("Treg\nsuppressive" = "Treg_suppressive", "Treg NLT" = "Treg_NLT",
+                                "Treg\nLT-like" = "Treg_LTlike", "Stress/low qual" = "lowQuality",
+                                "Stress\n/low qual" = "Treg_stress")
+
+plot_df$cluster = factor(plot_df$cluster)
+levels(plot_df$cluster) = rev(list("Treg\nsuppressive" = "Treg_suppressive", "Treg\nNLT" = "Treg_NLT",
+                                  "Treg\nLT-like" = "Treg_LTlike", "Treg\nNLT-like" = "Treg_NLTlike",
+                                  "eTreg" = "Treg_effector", "Treg\nStat1" = "Treg_Stat1",
+                                  "cTreg" = "Treg_lymphoid", "Stress\n/low qual" = "lowQuality",
+                                  "Stress\n/low qual" = "Treg_stress"))
+plot_df$white = ifelse(plot_df$perc>70, "white", "black")
+
+labs_heat_10x = ggplot(plot_df[plot_df$tissue!="colon",], 
+                       aes(x = labs, y = cluster, fill = perc, label = round(perc, 1)))+
+  facet_grid(tissue~., scales = "free_y", switch = "y", space = "free")+
+  geom_tile()+geom_text(mapping = aes(colour = white), size = 1.7, show.legend = F)+
+  labs(x = "Assignments", y = "Subpopulation by Tissue", fill = "% of\nSubpop.")+
+  guides(fill = guide_colorbar(barheight = 0.45, barwidth = 3.6, direction = "horizontal",
+                               title.position = "left"))+
+  scale_fill_gradientn(colors = RColorBrewer::brewer.pal(n = 9, 
+                                                         name = "PuBuGn")[-c(9,8)])+
+  scale_colour_manual(values = c("black", "grey95"))+
+  scale_x_discrete(position = "top")+
+  theme_classic()+
+  theme(axis.text.y = element_text(size = 5.5, colour = "black"),
+        axis.line = element_blank(),
+        axis.title = element_text(size = 5.5, face = "bold"),
+        axis.text.x = element_text(size = 5.5, angle = 90, colour = "black",
+                                   hjust = 0, vjust = 0.5),
+        strip.text = element_text(size = 6, colour = "black", face = "bold"),
+        strip.background = element_rect(size = 0.15, linetype = "solid"),
+        panel.background = element_blank(),
+        plot.margin = unit(c(0, 0, 0.75, 0), "cm"),
+        legend.title = element_text(size = 5.5, face = "bold"),
+        legend.position = c(0.1, -0.07),
+        legend.text = element_text(size = 4.75),
+        legend.background = element_blank(),
+        legend.margin = margin(0,0,0,0),
+        legend.box.margin = margin(0,0,0,0),
+        legend.box.spacing = unit(0.05, "lines"),
+        legend.title.align = 0)
+
+save(labs_heat_10x, file = "FINAL_PLOTS/plot_repository/labs_heat_10x.RData")
+```
+
+
+
+Plot labels confusion matrix - SS2
+
+```{r, fig.height=2, fig.width=2.5}
+sub_labs = labs_meta_ss2[grep("-state", labs_meta_ss2$t_c_cond),]
+tab_ss2 = table(sub_labs[,c("tissue_exp", "labs")])
+tab_ss2 = tab_ss2[rowSums(tab_ss2)>0,]
+plot_df = reshape2::melt(tab_ss2)
+plot_df$perc = reshape2::melt(tab_ss2/rowSums(tab_ss2)*100)$value
+plot_df$cluster = unlist(lapply(strsplit(as.character(plot_df$cl_tiss), ".in."), function(x) x[1]))
+plot_df$tissue = unlist(lapply(strsplit(as.character(plot_df$cl_tiss), ".in."), function(x) x[2]))
+plot_df$tissue_exp = factor(plot_df$tissue_exp)
+levels(plot_df$tissue_exp) = rev(list("colon" = "colon", "skin" = "skin",
+                                "mLN" = "mLN", "bLN" = "ln",
+                                "spleen" = "spleen"))
+plot_df$labs = factor(plot_df$labs)
+levels(plot_df$labs) = list("Treg\nsuppressive" = "Treg_suppressive", "Treg NLT" = "Treg_NLT",
+                            "Treg LT-like" = "Treg_LTlike", "Treg NLT-like" = "Treg_NLTlike",
+                            "eTreg" = "Treg_effector", "Treg Stat1" = "Treg_Stat1",
+                            "cTreg" = "Treg_lymphoid", "Stress/low qual" = "lowQuality",
+                            "Stress/low qual" = "Treg_stress")
+plot_df$white = ifelse(plot_df$perc>55, "white", "black")
+
+labs_heat_ss2 = ggplot(plot_df, aes(x = labs, y = tissue_exp, fill = perc, label = round(perc, 1)))+
+  geom_tile()+geom_text(mapping = aes(colour = white), size = 1.75, show.legend = F)+
+  labs(x = "Assignments", y = "Treg sorted from", fill = "% of\nTreg")+
+  guides(fill = guide_colorbar(barwidth = 0.5))+
+  scale_fill_gradientn(colors = RColorBrewer::brewer.pal(n = 9, 
+                                                         name = "PuBuGn")[-c(9,8)])+
+  scale_colour_manual(values = c("black", "grey95"))+
+  scale_x_discrete(position = "top")+
+  theme_classic()+
+  theme(axis.text.y = element_text(size = 5.5, colour = "black"),
+        axis.line = element_blank(),
+        axis.title = element_text(size = 5.5, face = "bold"),
+        axis.text.x = element_text(size = 5.5, angle = 90, colour = "black",
+                                   hjust = 0, vjust = 0.5),
+        strip.text = element_text(size = 6, colour = "black", face = "bold"),
+        strip.background = element_rect(size = 0.3, linetype = "solid"),
+        panel.background = element_blank(),
+        legend.title = element_text(size = 5.5, face = "bold"),
+        legend.text = element_text(size = 4.75),
+        legend.background = element_blank(),
+        plot.margin = unit(c(0, 0, 0, 0), "cm"),
+        legend.margin = margin(0,0,0,0),
+        legend.box.margin = margin(15,3,0,0))
+save(labs_heat_ss2, file = "FINAL_PLOTS/plot_repository/labs_heat_ss2.RData")
+```
+
+
+
+DE NLT vs suppressive
+
+```{r, fig.height=1.8, fig.width=1.8}
+dat = SubsetData(all_data_cl, cells.use = rownames(all_data_cl@meta.data)[all_data_cl@meta.data$cell_type_sort=="Treg_colon"])
+genes_mean_cl = apply(dat@data, 1, function(x) tapply(x, dat@meta.data$cl_annot, mean))
+genes_mean_cl = merge(t(genes_mean_cl), gene_names, by.x = 0, by.y = 1)
+genes_per_cl = t(apply(dat@data, 1, function(x) tapply(x, dat@meta.data$cl_annot, function(y) sum(y>0)/length(y))))
+colnames(genes_per_cl) = paste0("per_", colnames(genes_per_cl))
+genes_mean_cl = merge(genes_mean_cl, genes_per_cl, by.x = 1, by.y = 0)
+genes_mean_cl = merge(genes_mean_cl, pairwise_subcl_tiss_list$Treg_NLT.in.colon.vs.Treg_suppressive.in.colon[,c(1,4)], 
+                      by = 1, all.x = T)
+genes_mean_cl$avg_logFC[is.na(genes_mean_cl$avg_logFC)] = 0
+genes_mean_cl$avg_logFC = abs(genes_mean_cl$avg_logFC)
+
+degenes = pairwise_subcl_tiss_list$Treg_NLT.in.colon.vs.Treg_suppressive.in.colon$V2[abs(pairwise_subcl_tiss_list$Treg_NLT.in.colon.vs.Treg_suppressive.in.colon$avg_logFC)>=0.25 & pairwise_subcl_tiss_list$Treg_NLT.in.colon.vs.Treg_suppressive.in.colon$p_val_adj<=0.05]
+genes_mean_cl$isDE = genes_mean_cl$V2 %in% degenes
+genes_mean_cl$isDE = ifelse(genes_mean_cl$isDE & genes_mean_cl$Treg_NLT>genes_mean_cl$Treg_suppressive,
+                            "Treg NLT",
+                            ifelse(genes_mean_cl$isDE & genes_mean_cl$Treg_NLT<genes_mean_cl$Treg_suppressive,
+                                   "Treg suppressive", "Non-DE"))
+genes_mean_cl$isDE = factor(genes_mean_cl$isDE, levels = c("Treg suppressive", "Treg NLT", "Non-DE"))
+genes_mean_cl$per_size = ifelse(genes_mean_cl$isDE=="Treg NLT", genes_mean_cl$Treg_NLT,
+                                ifelse(genes_mean_cl$isDE=="Treg suppressive", genes_mean_cl$Treg_suppressive, 0))
+
+text_df = genes_mean_cl[genes_mean_cl$V2 %in% c("Tnfrsf9", "Il1rl1", "Gata3", "Il10","Cd83","Ccr2", "Fth1","Gzmb", "Dgat2","Kdm6b","Nrp1",
+                                                "Maf", "Lag3", "Tnfrsf9", "Tnfrsf4", "Itgb8", "Cxcr3", "Ikzf2", "Ly6a", "Areg"),]
+genes_mean_cl = genes_mean_cl[order(genes_mean_cl$isDE, decreasing = T),]
+
+de_nlt_sup = ggplot(genes_mean_cl, aes(x = per_Treg_NLT, y = per_Treg_suppressive, colour = isDE))+
+  geom_point(shape = 19, size = 0.6)+
+  ggrepel::geom_text_repel(data = text_df, colour = "black", max.iter = 4000, seed = 352,
+                           mapping = aes(x = per_Treg_NLT, y = per_Treg_suppressive, label = V2),
+                           min.segment.length = 0, fontface = "bold", size = 1.9, show.legend = F)+
+  scale_colour_manual(values = c(cl_treg_pal, "Non-DE" = "grey85"))+
+  scale_x_continuous(breaks = c(0, .25, .5, .75, 1), labels = c(0, 25, 50, 75, 100))+
+  scale_y_continuous(breaks = c(0, .25, .5, .75, 1), labels = c(0, 25, 50, 75, 100))+
+  labs(x = "Colon Treg NLT %", y = "Colon Treg suppressive %")+
+  guides(colour = guide_legend(override.aes = list(size = 1.7), title = "Subpopulation", order = 1, 
+                             title.position = "top", direction = "horizontal", title.hjust = 0))+
+  de_theme+
+  theme(legend.key.size = unit(0.5, "lines"),
+        legend.position = c(1.11,-0.3),
+        legend.justification = "right",
+        plot.margin = unit(c(0,0,1.1,0.25),"lines"),
+        axis.text = element_text(size = 4.7),
+        axis.title = element_text(size = 5),
+        legend.text = element_text(size = 5),
+        legend.title = element_text(size = 5.5, face = "bold"))
+
+save(de_nlt_sup, file = "FINAL_PLOTS/plot_repository/de_nlt_sup.RData")
+```
+
+
+
+DE Treg colon vs skin
+
+```{r, fig.height=1.8, fig.width=1.8}
+dat = SubsetData(all_data_cl, cells.use = rownames(all_data_cl@meta.data)[all_data_cl@meta.data$cl_tiss=="Treg_NLT.in.skin" |
+                                                                            all_data_cl@meta.data$cl_tiss=="Treg_NLT.in.colon"])
+genes_mean_cl = apply(dat@data, 1, function(x) tapply(x, dat@meta.data$cl_tiss, mean))
+genes_mean_cl = merge(t(genes_mean_cl), gene_names, by.x = 0, by.y = 1)
+genes_per_cl = t(apply(dat@data, 1, function(x) tapply(x, dat@meta.data$cl_tiss, function(y) sum(y>0)/length(y))))
+colnames(genes_per_cl) = paste0("per_", colnames(genes_per_cl))
+genes_mean_cl = merge(genes_mean_cl, genes_per_cl, by.x = 1, by.y = 0)
+genes_mean_cl = merge(genes_mean_cl, pairwise_subcl_tiss_list$Treg_NLT.in.colon.vs.Treg_NLT.in.skin[,c(1,4)], 
+                      by = 1, all.x = T)
+genes_mean_cl$avg_logFC[is.na(genes_mean_cl$avg_logFC)] = 0
+genes_mean_cl$avg_logFC = abs(genes_mean_cl$avg_logFC)
+
+degenes = pairwise_subcl_tiss_list$Treg_NLT.in.colon.vs.Treg_NLT.in.skin$V2[abs(pairwise_subcl_tiss_list$Treg_NLT.in.colon.vs.Treg_NLT.in.skin$avg_logFC)>=0.25 & pairwise_subcl_tiss_list$Treg_NLT.in.colon.vs.Treg_NLT.in.skin$p_val_adj<=0.05]
+genes_mean_cl$isDE = genes_mean_cl$V2 %in% degenes
+genes_mean_cl$isDE = ifelse(genes_mean_cl$isDE & genes_mean_cl$Treg_NLT.in.colon>genes_mean_cl$Treg_NLT.in.skin,
+                            "Treg Colon",
+                            ifelse(genes_mean_cl$isDE & genes_mean_cl$Treg_NLT.in.colon<genes_mean_cl$Treg_NLT.in.skin,
+                                   "Treg Skin", "Non-DE"))
+genes_mean_cl$isDE = factor(genes_mean_cl$isDE, levels = c("Treg Skin", "Treg Colon", "Non-DE"))
+genes_mean_cl$per_size = ifelse(genes_mean_cl$isDE=="Treg Colon", genes_mean_cl$Treg_NLT.in.colon,
+                                ifelse(genes_mean_cl$isDE=="Treg Skin", genes_mean_cl$Treg_NLT.in.skin, 0))
+
+text_df = genes_mean_cl[genes_mean_cl$V2 %in% c("Itgae", "Ikzf4", "Itga4", "Tnfrsf8", "Tnfaip3", "Gata3", "Il1rl1", "Rora","Nrp1",
+                                                "Gimap6", "Dgat2", "Lgals3", "Cd28", "Smad7", "S100a4"),]
+genes_mean_cl = genes_mean_cl[order(genes_mean_cl$isDE, decreasing = T),]
+
+de_treg_cs_sup = ggplot(genes_mean_cl, aes(x = per_Treg_NLT.in.colon, y = per_Treg_NLT.in.skin, 
+                                           colour = isDE, shape = isDE))+
+  geom_point(size = 0.7)+
+  ggrepel::geom_text_repel(data = text_df, colour = "black",
+                           mapping = aes(x = per_Treg_NLT.in.colon, y = per_Treg_NLT.in.skin, label = V2), 
+                           min.segment.length = 0, fontface = "bold", size = 1.9, show.legend = F)+
+  scale_colour_manual(values = c("Treg Colon" = sort_pal[1], 
+                               "Treg Skin" = sort_pal[1], 
+                               "Non-DE" = "grey85"), name = "Subpopulation")+
+  scale_shape_manual(values = c("Treg Colon" = 19, 
+                               "Treg Skin" = 1, 
+                               "Non-DE" = 20), name = "Subpopulation")+
+  scale_size_continuous(range = c(0.3, 2.5))+
+  scale_x_continuous(breaks = c(0, .25, .5, .75, 1), labels = c(0, 25, 50, 75, 100))+
+  scale_y_continuous(breaks = c(0, .25, .5, .75, 1), labels = c(0, 25, 50, 75, 100))+
+  labs(x = "Colon Treg NLT %", y = "Skin Treg NLT %")+
+  guides(colour = guide_legend(override.aes = list(size = 1.7), order = 1, direction = "horizontal",
+                             title.position = "top", title.hjust = 0),
+         shape = guide_legend(override.aes = list(size = 1.7), order = 1, direction = "horizontal",
+                             title.position = "top", title.hjust = 0))+
+  de_theme+
+  theme(legend.key.size = unit(0.5, "lines"),
+        legend.position = c(1.03,-0.3),
+        legend.justification = "right",
+        plot.margin = unit(c(0,0,1.1,0),"lines"),
+        axis.text = element_text(size = 4.7),
+        axis.title = element_text(size = 5),
+        legend.text = element_text(size = 5),
+        legend.title = element_text(size = 5.5, face = "bold"))
+save(de_treg_cs_sup, file = "FINAL_PLOTS/plot_repository/de_treg_cs_sup.RData")
+```
+
+
+
+DE Colon vs Skin (Treg and Tmem) SS2
+
+```{r}
+de_ss2_cs_plot_list = list()
+
+genes_list = list("Treg" = c("Itgae", "Ikzf4", "Erdr1", "Cd83", 
+                             "Gpr15", "Ifngr1", "Pim1", "Lgals3", "Dgat2", 
+                             "Batf", "S100a6", "S100a4", "Gimap6"), 
+                  "Tmem" = c("Itgae", "Ikzf4", "Itga4", "Tnfrsf8", 
+                             "Tnfaip3", "Gata3", "Il1rl1", "Rora","Nrp1",
+                             "Gimap6", "Dgat2", "Lgals3", "Cd28", "Smad7", "S100a4"))
+
+for(n in names(de_colon_skin_ss2)[2:3]){
+  dat = SubsetData(colon_skin_data, 
+                   cells.use = rownames(colon_skin_data@meta.data)[colon_skin_data@meta.data$cell.type==n])
+  genes_mean_cl = apply(dat@data, 1, function(x) tapply(x, dat@meta.data$tissue, mean))
+  genes_mean_cl = merge(t(genes_mean_cl), gene_names, by.x = 0, by.y = 1)
+  genes_per_cl = t(apply(dat@data, 1, function(x) tapply(x, dat@meta.data$tissue, function(y) sum(y>0)/length(y))))
+  colnames(genes_per_cl) = paste0("per_", colnames(genes_per_cl))
+  
+  genes_mean_cl = merge(genes_mean_cl, genes_per_cl, by.x = 1, by.y = 0)
+  genes_mean_cl = merge(genes_mean_cl, de_colon_skin_ss2[[n]][,c(1,4)], 
+                        by = 1, all.x = T)
+  genes_mean_cl$avg_logFC[is.na(genes_mean_cl$avg_logFC)] = 0
+  genes_mean_cl$avg_logFC = abs(genes_mean_cl$avg_logFC)
+  
+  degenes = de_colon_skin_ss2[[n]]$V2[abs(de_colon_skin_ss2[[n]]$avg_logFC)>=0.25 & 
+                                        de_colon_skin_ss2[[n]]$p_val_adj<=0.05]
+  genes_mean_cl$isDE = genes_mean_cl$V2 %in% degenes
+  genes_mean_cl$isDE = ifelse(genes_mean_cl$isDE & genes_mean_cl$colon>genes_mean_cl$skin, "colon",
+                              ifelse(genes_mean_cl$isDE & genes_mean_cl$colon<genes_mean_cl$skin,
+                                     "skin", "Non-DE"))
+
+  genes_mean_cl$isDE = factor(genes_mean_cl$isDE, levels = c("skin", "colon", "Non-DE"))
+  genes_mean_cl$per_size = ifelse(genes_mean_cl$isDE=="colon", genes_mean_cl$colon,
+                                  ifelse(genes_mean_cl$isDE=="skin", genes_mean_cl$skin, 0))
+  
+  text_df = genes_mean_cl[genes_mean_cl$V2 %in% genes_list[[n]],]
+  genes_mean_cl = genes_mean_cl[order(genes_mean_cl$isDE, decreasing = T),]
+  
+  de_ss2_cs_plot_list[[n]] = ggplot(genes_mean_cl, aes(x = per_colon, y = per_skin, 
+                                                       colour = isDE, shape = isDE))+
+    geom_point(size = 0.6)+
+    ggrepel::geom_text_repel(data = text_df, colour = "black",
+                             mapping = aes(x = per_colon, y = per_skin, label = V2), 
+                             min.segment.length = 0, fontface = "bold", size = 1.9, show.legend = F)+
+    scale_colour_manual(values = c("colon" = sort_pal[1], 
+                                 "skin" = sort_pal[1], 
+                                 "Non-DE" = "grey85"), name = "Tissue")+
+    scale_shape_manual(values = c("colon" = 19, 
+                                 "skin" = 1, 
+                                 "Non-DE" = 20), name = "Tissue")+
+    scale_size_continuous(range = c(0.3, 2.5))+
+    scale_x_continuous(breaks = c(0, .25, .5, .75, 1), labels = c(0, 25, 50, 75, 100))+
+    scale_y_continuous(breaks = c(0, .25, .5, .75, 1), labels = c(0, 25, 50, 75, 100))+
+    labs(x = paste0("Colon ", n, " NLT %"), y = paste0("Skin ", n, " NLT %"))+
+    guides(colour = guide_legend(override.aes = list(size = 1.7), 
+                                 order = 1, direction = "horizontal",
+                                 title.position = "top", title.hjust = 0),
+           shape = guide_legend(override.aes = list(size = 1.7), 
+                                order = 1, direction = "horizontal",
+                                title.position = "top", title.hjust = 0))+
+    de_theme+
+    theme(legend.key.size = unit(0.5, "lines"),
+          legend.position = "bottom",
+          legend.justification = "left",
+          plot.margin = unit(c(0.3,0,1.1,0),"lines"),
+          axis.text = element_text(size = 4.7),
+          axis.title = element_text(size = 5),
+          legend.text = element_text(size = 5),
+          legend.title = element_text(size = 5.5, face = "bold"))
+}
+
+save(de_ss2_cs_plot_list, file = "FINAL_PLOTS/plot_repository/de_ss2_cs_plot_list.RData")
+```
+
+
+
+DE NLT-like between LN
+
+```{r, fig.height=1.8, fig.width=1.8}
+dat = SubsetData(all_data_cl, 
+                 cells.use = rownames(all_data_cl@meta.data)[all_data_cl@meta.data$cl_tiss %in% c("Treg_NLTlike.in.mLN", "Treg_NLTlike.in.bLN")])
+genes_mean_cl = apply(dat@data, 1, function(x) tapply(x, dat@meta.data$cl_tiss, mean))
+genes_mean_cl = merge(t(genes_mean_cl), gene_names, by.x = 0, by.y = 1)
+genes_per_cl = t(apply(dat@data, 1, function(x) tapply(x, dat@meta.data$cl_tiss, function(y) sum(y>0)/length(y))))
+colnames(genes_per_cl) = paste0("per_", colnames(genes_per_cl))
+genes_mean_cl = merge(genes_mean_cl, genes_per_cl, by.x = 1, by.y = 0)
+genes_mean_cl = merge(genes_mean_cl, pairwise_subcl_tiss_list$Treg_NLTlike.in.bLN.vs.Treg_NLTlike.in.mLN[,c(1,4)], 
+                      by = 1, all.x = T)
+genes_mean_cl$avg_logFC[is.na(genes_mean_cl$avg_logFC)] = 0
+genes_mean_cl$avg_logFC = abs(genes_mean_cl$avg_logFC)
+
+degenes = pairwise_subcl_tiss_list$Treg_NLTlike.in.bLN.vs.Treg_NLTlike.in.mLN$V2[abs(pairwise_subcl_tiss_list$Treg_NLTlike.in.bLN.vs.Treg_NLTlike.in.mLN$avg_logFC)>=0.25 & pairwise_subcl_tiss_list$Treg_NLTlike.in.bLN.vs.Treg_NLTlike.in.mLN$p_val_adj<=0.05]
+genes_mean_cl$isDE = genes_mean_cl$V2 %in% degenes
+genes_mean_cl$isDE = ifelse(genes_mean_cl$isDE & genes_mean_cl$Treg_NLTlike.in.bLN>genes_mean_cl$Treg_NLTlike.in.mLN,
+                            "bLN",
+                            ifelse(genes_mean_cl$isDE & genes_mean_cl$Treg_NLTlike.in.bLN<genes_mean_cl$Treg_NLTlike.in.mLN,
+                                   "mLN", "Non-DE"))
+genes_mean_cl$isDE = factor(genes_mean_cl$isDE, levels = c("mLN", "bLN", "Non-DE"))
+genes_mean_cl$per_size = ifelse(genes_mean_cl$isDE=="bLN", genes_mean_cl$Treg_NLTlike.in.bLN,
+                                ifelse(genes_mean_cl$isDE=="mLN", genes_mean_cl$Treg_NLTlike.in.mLN, 0))
+
+text_df = genes_mean_cl[genes_mean_cl$V2 %in% c("Ccr9", "Lag3", "Nrp1","Batf","Il10",
+                                                "Rorc", "Itga4","Itgb1", "Maf","Ikzf2",
+                                                "Nt5e","Sell","Stat1","Id3"),]
+genes_mean_cl = genes_mean_cl[order(genes_mean_cl$isDE, decreasing = T),]
+
+de_nltLine_ln = ggplot(genes_mean_cl, aes(x = per_Treg_NLTlike.in.bLN, 
+                                          y = per_Treg_NLTlike.in.mLN, 
+                                          colour = isDE, shape = isDE))+
+  geom_point(size = 0.6)+
+  ggrepel::geom_text_repel(data = text_df, colour = "black", max.iter = 4000, seed = 352,
+                           mapping = aes(x = per_Treg_NLTlike.in.bLN, 
+                                         y = per_Treg_NLTlike.in.mLN, label = V2),
+                           min.segment.length = 0, fontface = "bold", size = 1.9,
+                           show.legend = F)+
+  scale_colour_manual(values = c("bLN" = "#F27676", "mLN" = "#F27676",
+                                 "Non-DE" = "grey85"),
+                      name = "Subpopulation")+
+  scale_shape_manual(values = c("mLN" = 19, "bLN" = 1, "Non-DE" = 20), 
+                     name = "Subpopulation")+
+  scale_x_continuous(breaks = c(0, .25, .5, .75, 1), labels = c(0, 25, 50, 75, 100))+
+  scale_y_continuous(breaks = c(0, .25, .5, .75, 1), labels = c(0, 25, 50, 75, 100))+
+  labs(x = "bLN Treg NLT-like %", y = "mLN Treg NLT-like %")+
+  guides(colour = guide_legend(override.aes = list(size = 1.7), 
+                               title = "Subpopulation", order = 1, 
+                               title.position = "top", 
+                               direction = "horizontal", title.hjust = 0),
+         shape = guide_legend(override.aes = list(size = 1.7), 
+                              title = "Subpopulation", order = 1, 
+                              title.position = "top", 
+                              direction = "horizontal", title.hjust = 0))+
+  de_theme+
+  theme(legend.key.size = unit(0.5, "lines"),
+        legend.position = c(-.2,-0.31),
+        legend.justification = "left",
+        plot.margin = unit(c(0,0,1.1,0.25),"lines"),
+        axis.text = element_text(size = 4.7),
+        axis.title = element_text(size = 5),
+        legend.text = element_text(size = 5),
+        legend.title = element_text(size = 5.5, face = "bold"))
+
+save(de_nltLine_ln, file = "FINAL_PLOTS/plot_repository/de_nltLine_ln.RData")
+```
+
+
+
+Heatmap markers - Treg
+
+```{r, fig.width=4, fig.height=3.3}
+genes_mean_all = t(apply(all_data_cl@data, 1, function(x) tapply(x, all_data_cl@meta.data$cl_tiss, mean)))
+
+genes_mean_treg = genes_mean_all[,grepl("Treg", colnames(genes_mean_all)) & colnames(genes_mean_all)!="Treg_stress.in.colon"]
+x = colnames(genes_mean_treg)
+genes_mean_treg = t(apply(genes_mean_treg, 1, scale))
+colnames(genes_mean_treg) = x
+genes_mean_treg = merge(gene_names, genes_mean_treg, by.x = 1, by.y = 0)
+
+plot_df = reshape2::melt(genes_mean_treg[,-1], id.var = "V2")
+plot_df$tissue = sapply(strsplit(as.character(plot_df$variable), 
+                                 ".in.", fixed = T), function(x) x[2])
+plot_df$cell_type = sapply(strsplit(as.character(plot_df$variable),
+                                    ".in.", fixed = T), function(x) x[1])
+
+genes_use = c("Tcf7", "Bcl2", "Sell","S1pr1","Ccr7","Stat1","Tnfrsf4","Tnfrsf9","Relb","Cd83","Pdcd1",
+              "Ikzf2","Pim1",  "Ctla4", "Icos", "Cd44", "Cmtm7","Fgl2","Lgals1","Klrg1","Rora","Itgae","S100a4",
+              "Areg","Gata3","Kdm6b","Il1rl1","Il10","Gzmb","Ccr2","Ccr1")
+plot_df = plot_df[plot_df$V2 %in% genes_use,]
+plot_df$V2 = factor(plot_df$V2, levels = rev(genes_use))
+
+plot_df$cell_type = gsub("_", " ", plot_df$cell_type)
+plot_df$cell_type[plot_df$cell_type=="Treg effector"] = "eTreg"
+plot_df$cell_type[plot_df$cell_type=="Treg lymphoid"] = "cTreg"
+plot_df$cell_type[plot_df$cell_type=="Treg NLTlike"] = "Treg NLT-like"
+plot_df$cell_type[plot_df$cell_type=="Treg LTlike"] = "Treg LT-like"
+plot_df$cell_type = gsub(" ", "\n", plot_df$cell_type)
+plot_df$cell_type[plot_df$cell_type=="Treg\nNLT"] = "Treg NLT"
+plot_df$tissue = factor(plot_df$tissue, levels = c("spleen", "mLN", "bLN", "colon", "skin"))
+plot_df$cell_type = factor(plot_df$cell_type, levels = c("cTreg", "Treg\nStat1", "eTreg", "Treg\nNLT-like", 
+                                                         "Treg\nLT-like", "Treg NLT", "Treg\nsuppressive"))
+
+cl_treg_pal_alt = cl_treg_pal
+names(cl_treg_pal_alt) = gsub(" ", "\n", names(cl_treg_pal_alt))
+names(cl_treg_pal_alt)[5] = "Treg NLT"
+
+plot_df = unique(merge(plot_df, data.frame(cl_treg_pal_alt), by.x = 5, by.y = 0))
+plot_df$value[plot_df$value>2.5] = 2.5
+plot_df$value[plot_df$value<(-1.5)] = -1.5
+
+heatmap_treg_cl = ggplot(data = plot_df, aes(x = cell_type, y = V2, fill = value))+
+  facet_grid(~tissue, scales = "free", space = "free_x")+
+  geom_tile()+
+  expand_limits(y = 39) +
+  geom_text(aes(x = cell_type, colour = cell_type, label = cell_type), 
+            y = 35.5, vjust = 0.5, angle = 90, show.legend = F, 
+            size = 2, fontface = "bold") +
+  scale_x_discrete(expand = c(0,0), position = "top")+
+  scale_colour_manual(values = cl_treg_pal_alt)+
+  scale_fill_viridis_c(option = "inferno", end = 1)+
+  guides(fill = guide_colourbar(title = "Mean\nScaled\nlog(exp)", barwidth = 0.5))+
+  theme_classic()+
+  theme(strip.placement = "outside",
+        strip.switch.pad.grid = unit(0, "cm"),
+        strip.background = element_rect(size = 0.5, linetype = "solid"),
+        panel.background = element_blank(),
+        axis.title = element_blank(),
+        axis.line = element_blank(),
+        axis.text = element_text(size = 6),
+        axis.ticks.x = element_blank(),
+        axis.text.x = element_blank(),
+        axis.text.y = element_text(colour = "black"),
+        strip.text = element_text(size = 6, face = "bold"),
+        legend.title = element_text(size = 5.5, hjust = 0),
+        legend.text = element_text(size = 5, hjust = 0),
+        legend.box.margin = margin(0,0,0,0),
+        legend.box.spacing = unit(0.05, "lines"),
+        legend.title.align = 0)
+
+save(heatmap_treg_cl, file = "FINAL_PLOTS/plot_repository/heatmap_treg_cl.RData")
+```
+
+
+
+Heatmap markers - Tmem
+
+```{r, fig.width=4, fig.height=3.5}
+genes_mean_all = t(apply(all_data_cl@data, 1, function(x) tapply(x, all_data_cl@meta.data$cl_tiss, mean)))
+
+genes_mean_treg = genes_mean_all[,grepl("Tmem", colnames(genes_mean_all)) & 
+                                   !grepl("stress", colnames(genes_mean_all)) & !grepl("skin", colnames(genes_mean_all))]
+x = colnames(genes_mean_treg)
+genes_mean_treg = t(apply(genes_mean_treg, 1, scale))
+colnames(genes_mean_treg) = x
+genes_mean_treg = merge(gene_names, genes_mean_treg, by.x = 1, by.y = 0)
+
+plot_df = reshape2::melt(genes_mean_treg[,-1], id.var = "V2")
+plot_df$tissue = sapply(strsplit(as.character(plot_df$variable), 
+                                 ".in.", fixed = T), function(x) x[2])
+plot_df$cell_type = sapply(strsplit(as.character(plot_df$variable),
+                                    ".in.", fixed = T), function(x) x[1])
+
+genes_use = c("S1pr1","Lef1","Ccr7","Sell", "Il7r","Tcf7",
+              "Slamf6", "Pdcd1", "Icos", "Cxcr5", "Sostdc1", #"Cd40lg","Cd200","Gpm6b",
+              "Cxcl10","Mki67", "Cdk1",
+              "Rorc","Il17f","Cxcr6","Il17a","Ccl5", "Nkg7","Tbx21","Ccr5",
+              "Gata3","Il13","Il4","Ctla2a", "Rora","Ramp3","Id2","Vps37b")
+plot_df = plot_df[plot_df$V2 %in% genes_use,]
+plot_df$V2 = factor(plot_df$V2, levels = rev(genes_use))
+
+plot_df$cell_type = gsub("_", " ", plot_df$cell_type)
+plot_df$cell_type[plot_df$cell_type=="Tmem lymphoidEgressing"] = "Tmem Th1"
+plot_df$cell_type[plot_df$cell_type=="Tmem lymphoidResident"] = "Tmem Naive"
+plot_df$cell_type[plot_df$cell_type=="Tmem lymphoid"] = "Tmem Naive"
+plot_df$cell_type[plot_df$cell_type=="Tmem activated"] = "Tmem Tfh"
+plot_df$cell_type[plot_df$cell_type=="Tmem LTlike"] = "Tmem LT-like"
+plot_df$tissue = factor(plot_df$tissue, levels = c("spleen", "bLN", "mLN", "colon"))
+plot_df$cell_type = factor(plot_df$cell_type, levels = c("Tmem Naive", "Tmem Tfh", "Tmem Cxcl10", "Tmem cycling", 
+                                                         "Tmem LT-like", "Tmem Th17", "Tmem Th1", "Tmem Th2"))
+
+plot_df = unique(merge(plot_df, data.frame(cl_tmem_pal), by.x = 5, by.y = 0))
+plot_df$value[plot_df$value>2.5] = 2.5
+plot_df$value[plot_df$value<(-1.5)] = -1.5
+
+heatmap_tmem_cl = ggplot(data = plot_df, aes(x = cell_type, y = V2, fill = value))+
+  facet_grid(~tissue, scales = "free", space = "free_x")+
+  geom_tile()+
+  expand_limits(y = 39) +
+  geom_text(aes(x = cell_type, colour = cell_type, label = cell_type), 
+            y = 35, vjust = 0.5, angle = 90, show.legend = F, 
+            size = 2, fontface = "bold") +
+  scale_x_discrete(expand = c(0,0), position = "top")+
+  scale_colour_manual(values = cl_tmem_pal)+
+  scale_fill_viridis_c(option = "inferno", end = 1)+
+  guides(fill = guide_colourbar(title = "Mean\nScaled\nlog(exp)", barwidth = 0.5))+
+  theme_classic()+
+  theme(strip.placement = "outside",
+        strip.switch.pad.grid = unit(0, "cm"),
+        strip.background = element_rect(size = 0.5, linetype = "solid"),
+        panel.background = element_blank(),
+        axis.title = element_blank(),
+        axis.line = element_blank(),
+        axis.text = element_text(size = 6),
+        axis.ticks.x = element_blank(),
+        axis.text.x = element_blank(),
+        axis.text.y = element_text(colour = "black"),
+        strip.text = element_text(size = 6, face = "bold"),
+        legend.title = element_text(size = 5.5, hjust = 0),
+        legend.text = element_text(size = 5, hjust = 0),
+        legend.box.margin = margin(0,0,0,0),
+        legend.box.spacing = unit(0.05, "lines"),
+        legend.title.align = 0)
+
+save(heatmap_tmem_cl, file = "FINAL_PLOTS/plot_repository/heatmap_tmem_cl.RData")
+```
+
+
+
+## Assemble Figures
+Figure 2
+
+```{r, fig.width=7.6, fig.height=4}
+load("FINAL_PLOTS/plot_repository/de_rat_bar.RData")
+load("FINAL_PLOTS/plot_repository/prop_bars.RData")
+load("FINAL_PLOTS/plot_repository/sub_tsne_list.RData")
+
+load("FINAL_PLOTS/plot_repository/lr_probs_fig.RData")
+load("FINAL_PLOTS/plot_repository/de_nlt_sup.RData")
+load("FINAL_PLOTS/plot_repository/de_treg_cs_sup.RData")
+load("FINAL_PLOTS/plot_repository/heatmap_treg_cl.RData")
+load("FINAL_PLOTS/plot_repository/labs_heat_10x.RData")
+load("FINAL_PLOTS/plot_repository/de_nltLine_ln.RData")
+
+leg = cowplot::get_legend(sub_tsne_list$Treg_spleen)
+fig_top = cowplot::plot_grid(sub_tsne_list$Treg_spleen+theme(legend.position = "none"), 
+                             sub_tsne_list$Treg_mLN+theme(legend.position = "none"), 
+                             sub_tsne_list$Treg_colon+theme(legend.position = "none"), 
+                             leg, sub_tsne_list$Treg_bLN+theme(legend.position = "none"), 
+                             sub_tsne_list$Skin+theme(legend.position = "none"), 
+                             ncol = 3, labels = "A", align = "hv", hjust = 0)
+
+
+fig_de = plot_grid(de_nlt_sup, de_treg_cs_sup, nrow = 2, labels = c("F", "H"))
+fig_bot = plot_grid(heatmap_treg_cl, fig_de, ncol = 2, rel_widths = c(1, 0.42), labels = c("B"))
+
+fig_l = plot_grid(fig_top, fig_bot, nrow = 2)
+
+fig_r = plot_grid(prop_bars+theme(legend.position = "none"),
+                  de_rat_bar+theme(legend.position = "none"),
+                  de_nltLine_ln, NULL, labels = c("C", "D", "E", "G"),
+                  labs_heat_10x, nrow = 5, rel_heights = c(0.91,0.91,1, 0.10, 1.8))
+
+fig2 = plot_grid(fig_l, fig_r, ncol = 2, rel_widths = c(1, 0.26))
+
+ggsave(fig2, filename = "FINAL_PLOTS/Figures/Figure02.pdf", paper = "a4", 
+       height = 8.2, width = 7.6, useDingbats = F)
+```
+
+
+
+Supplementary Figure 3 (SS2 colon vs skin + LR)
+
+```{r, fig.width=6.4, fig.height=3.2}
+load("FINAL_PLOTS/plot_repository/de_ss2_cs_plot_list.RData")
+load("FINAL_PLOTS/plot_repository/labs_heat_ss2.RData")
+
+supfig = plot_grid(de_ss2_cs_plot_list$Treg, NULL, labs_heat_ss2+theme(aspect.ratio = 1), 
+                   ncol = 3, nrow = 1, rel_widths = c(1,0.1, 0.9), 
+                   labels = c("A", "B"), align = "h")
+
+ggsave(supfig, filename = "FINAL_PLOTS/Figures/SupplementaryFigure03.pdf", paper = "a4", 
+       height = 3.2, width = 6.4, useDingbats = F)
+```
+
+
+
+Supplementary Figure 4 (Tmem clustering)
+
+```{r, fig.width=7.4, fig.height=4.2}
+load("FINAL_PLOTS/plot_repository/de_rat_bar_Tmem.RData")
+load("FINAL_PLOTS/plot_repository/prop_bars_Tmem.RData")
+load("FINAL_PLOTS/plot_repository/sub_tsne_list_Tmem.RData")
+load("FINAL_PLOTS/plot_repository/heatmap_tmem_cl.RData")
+
+leg = cowplot::get_legend(sub_tsne_list_Tmem$Tmem_spleen)
+fig_tsne = cowplot::plot_grid(sub_tsne_list_Tmem$Tmem_spleen+theme(legend.position = "none"), 
+                              sub_tsne_list_Tmem$Tmem_bLN+theme(legend.position = "none"), 
+                              sub_tsne_list_Tmem$Tmem_mLN+theme(legend.position = "none"), 
+                              sub_tsne_list_Tmem$Tmem_colon+theme(legend.position = "none"), 
+                              ncol = 2, labels = "A", align = "hv", hjust = 0)
+
+fig_top = cowplot::plot_grid(fig_tsne, leg, 
+                             plot_grid(NULL, prop_bars_Tmem+theme(legend.position = "none"), 
+                                       NULL, de_rat_bar_Tmem+theme(legend.position = "none"), 
+                                       nrow = 4, align = "v", labels = c("C", "", "D"), rel_heights = c(0.12, 1, 0.12, 1)),
+                             ncol = 3, rel_widths = c(1, 0.2, 0.6), axis = c("none", "left", "none"))
+
+fig_bot = plot_grid(NULL, heatmap_tmem_cl, NULL, ncol = 3, rel_widths = c(0.23, 1, 0.23), labels = c("","B"))
+
+supfig3 = plot_grid(fig_top, NULL, fig_bot, nrow = 3, rel_heights = c(1.05, 0.05, 1))
+
+ggsave(supfig3, filename = "FINAL_PLOTS/Figures/SupplementaryFigure04.pdf", paper = "a4", 
+       height = 7.4, width = 7.4, useDingbats = F)
+```
+
+
+
+# Figure 3
+Load data
+
+```{r}
+load("./saved_data/10X/all_data_cl.RData")
+load("./saved_data/SS2/sr_list_SS2.RData")
+
+lv_proj_list = list(
+lv_colon_10x = read.csv("plots/10X/BGPLVM/latent_variables_colon_mLN_Treg_hvg.csv", 
+                    header = T, row.names = 1),
+lv_skinproj_10x = read.csv("plots/10X/BGPLVM/latent_variables_skin_bLN_colongenes.csv", 
+                           header = T, row.names = 1),
+lv_skin_10x = read.csv("plots/10X/BGPLVM/latent_variables_skin_bLN_Treg_hvg.csv", 
+                    header = T, row.names = 1),
+lv_colon_ss2 = read.csv("plots/SS2/BGPLVM/latent_variables_colon_mLN_Treg_hvg.csv", 
+                    header = T, row.names = 1),
+lv_skin_ss2 = read.csv("plots/SS2/BGPLVM/latent_variables_skin_bLN_Treg_hvg.csv", 
+                    header = T, row.names = 1)
+)
+lv_proj_list$lv_both_10x = rbind(lv_proj_list$lv_colon_10x, lv_proj_list$lv_skinproj_10x)
+
+ard_bgplvm_list = list(
+ard_colon_10x = read.csv("plots/10X/BGPLVM/ARD_colon_mLN_Treg_hvg.csv", 
+                    header = T, row.names = paste0("LV", 0:5)),
+ard_skin_10x = read.csv("plots/10X/BGPLVM/ARD_skin_bLN_Treg_hvg.csv", 
+                    header = T, row.names = paste0("LV", 0:5)),
+ard_colon_ss2 = read.csv("plots/SS2/BGPLVM/ARD_colon_mLN_Treg_hvg.csv", 
+                    header = T, row.names = paste0("LV", 0:5)),
+ard_skin_ss2 = read.csv("plots/SS2/BGPLVM/ARD_skin_bLN_Treg_hvg.csv", 
+                    header = T, row.names = paste0("LV", 0:5))
+)
+
+load("plots/10X/BGPLVM/switch_used_vars.RData")
+df_term = read.csv("plots/10X/BGPLVM/df_term_t0.csv", header = T, stringsAsFactors = F)
+labs_meta_ss2 = read.csv("plots/10X/LR/preds_metadata_Treg_SS2_allTreg10X.csv", header= T, row.names = 1)
+```
+
+*Velocyto figures were copied to the Figures folder*
+
+## Make plots
+BGPLVM projection with cluster distribution
+
+```{r, fig.height=3.4, fig.width=1.8}
+bgplvm_proj_list = list()
+for(n in names(lv_proj_list)){
+  plot_df = merge(all_data_cl@meta.data, lv_proj_list[[n]], by.x = 0, by.y = "cell")
+  
+  plot_df$cl_annot = factor(plot_df$cl_annot)
+  levels(plot_df$cl_annot) = list("Treg suppressive" = "Treg_suppressive", 
+                                  "Treg NLT" = "Treg_NLT",
+                                  "Treg LT-like" = "Treg_LTlike", 
+                                  "Treg NLT-like" = "Treg_NLTlike",
+                                  "eTreg" = "Treg_effector", "Treg Stat1" = "Treg_Stat1",
+                                  "cTreg" = "Treg_lymphoid")
+  
+  plot_df = plot_df[sample(1:nrow(plot_df), nrow(plot_df), replace = F),]
+  bgplvm_proj_list[[paste0(n, "_proj")]] = ggplot(plot_df, aes(x = LV0, y = LV2, 
+                                                               colour = cl_annot))+
+    geom_point(shape = 19, size = 0.17)+
+    scale_colour_manual(values = cl_treg_pal)+
+    theme_classic()+
+    tsne_theme+
+    theme(legend.position = "none", plot.margin = unit(c(0,0.1,0,0), "cm"))
+  
+  bgplvm_proj_list[[paste0(n, "_dens")]] = ggplot(plot_df, aes(x = LV0, fill = cl_annot))+
+    geom_density(alpha = 0.5, colour = "grey25")+
+    scale_fill_manual(values = cl_treg_pal, drop = F)+
+    guides(fill = guide_legend(title = "Subpopulation", title.position = "top",
+                               override.aes = list(alpha = 1), nrow = 3, ncol = 3),
+           colour = NULL)+
+    theme_classic()+
+    theme(legend.position = "bottom", 
+          legend.key.width = unit(0.45, "lines"),
+          legend.key.height = unit(0.45, "lines"),
+          axis.text = element_text(size = 4.5, colour = "black"),
+          axis.title = element_text(size = 5.5, colour = "black"),
+          legend.text = element_text(size = 5.5),
+          legend.title = element_text(size = 5.5),
+          plot.margin = unit(c(0,0.1,0,0), "cm"), 
+          legend.box.margin = margin(0,0,0.1,0), legend.background = element_blank())
+}
+
+leg = get_legend(bgplvm_proj_list$lv_skinproj_10x_dens)
+bgplvm_distrib = plot_grid(plot_grid(bgplvm_proj_list$lv_both_10x_proj, 
+          bgplvm_proj_list$lv_colon_10x_dens+
+            coord_cartesian(xlim = c(min(lv_proj_list$lv_both_10x$LV0), 
+                                     max(lv_proj_list$lv_both_10x$LV0)))+
+            labs(y = "Colon\n(density)")+
+            theme(legend.position = "none"),
+          bgplvm_proj_list$lv_skinproj_10x_dens+labs(y = "Skin\n(density)")+
+            coord_cartesian(xlim = c(min(lv_proj_list$lv_both_10x$LV0), 
+                                     max(lv_proj_list$lv_both_10x$LV0)))+
+            theme(legend.position = "none"), nrow = 3, rel_heights = c(1, .32, .32), 
+          align = "v"), leg, rel_heights = c(1, .15), nrow = 2)
+save(bgplvm_distrib, file = "FINAL_PLOTS/plot_repository/bgplvm_distrib.RData")
+
+leg = get_legend(bgplvm_proj_list$lv_skin_10x_dens)
+sup_bgplvm = plot_grid(plot_grid(bgplvm_proj_list$lv_skin_10x_proj, 
+          bgplvm_proj_list$lv_skin_10x_dens+
+            coord_cartesian(xlim = c(min(lv_proj_list$lv_skin_10x$LV0), 
+                                     max(lv_proj_list$lv_skin_10x$LV0)))+
+            labs(y = "Skin\n(density)")+
+            theme(legend.position = "none"), nrow = 2, rel_heights = c(1, .32), 
+          align = "v"), leg, rel_heights = c(1, .13), nrow = 2)
+save(sup_bgplvm, file = "FINAL_PLOTS/plot_repository/sup_bgplvm.RData")
+```
+
+
+
+Plot GO Term succession
+
+```{r, fig.width=4.3, fig.height=2.3}
+filt_df = df_term[df_term$domain=="BP" & df_term$n_genes>1,]
+filt_df$rank_colon = rank(filt_df$colon_t0_mean)
+filt_df$rank_skin = rank(filt_df$skin_t0_mean)
+filt_df = filt_df[order(filt_df$rank_colon),]
+filt_df$term[filt_df$term=="regulation of chemokine (C-X-C motif) ligand 2 production"] = "regulation of\nchemokine (C-X-C motif)\nligand 2 production"
+filt_df$term[filt_df$term=="T cell receptor signaling pathway"] = "T cell receptor\nsignaling pathway"
+filt_df$term[filt_df$term=="fatty acid homeostasis"] = "fatty acid\nhomeostasis"
+filt_df$term[filt_df$term=="immune system process"] = "immune system\nprocess"
+filt_df$term[filt_df$term=="cell-cell adhesion"] = "cell-cell\nadhesion"
+filt_df$term[filt_df$term=="chromatin remodeling"] = "chromatin\nremodeling"
+filt_df$term = factor(filt_df$term, levels = filt_df$term)
+
+cor_t0 = cor(filt_df$colon_t0_mean, filt_df$skin_t0_mean, method = "sp")
+
+plot_df = reshape2::melt(filt_df[,c(1,11,12)])
+terms_keep = c("chromatin\nremodeling", "T cell receptor\nsignaling pathway", 
+               "cell proliferation","cell-cell\nadhesion","locomotion",
+               "immune system\nprocess","fatty acid\nhomeostasis",
+               "cytokine production",
+               "T cell migration","glycolytic process")
+plot_df$variable = factor(plot_df$variable, levels = c("rank_skin", "rank_colon"))
+plot_df_c = plot_df[plot_df$variable=="rank_colon" & 
+                      plot_df$term %in% terms_keep,]
+plot_df_s = plot_df[plot_df$variable=="rank_skin" & 
+                      plot_df$term %in% terms_keep,]
+
+go_plot_pt = ggplot(plot_df, aes(x = variable, y = value, 
+                    group = term))+
+  scale_x_discrete(labels = c("Skin\n+ bLN", "Colon\n+ mLN"))+
+  geom_point(size = 1)+
+  geom_line(size = 0.5)+
+  ggrepel::geom_text_repel(data = plot_df_s, aes(x = variable, y = value, 
+                                                 label = term), 
+                           nudge_x = -1,min.segment.length = 0,
+                           segment.colour = "grey69", size = 1.68)+
+  ggrepel::geom_text_repel(data = plot_df_c, aes(x = variable, y = value, 
+                                                 label = term), 
+                           nudge_x = 1,min.segment.length = 0,
+                           segment.colour = "grey69", size = 1.68)+
+  coord_flip(xlim = c(0,3))+
+  annotate("text", x = 3.4, y = 3.5, label = "rho~'=0.61'", parse = T, size = 3.3)+
+  labs(y = "t0 rank")+
+  theme_classic()+
+  theme(axis.title.y = element_blank(),
+        aspect.ratio = 1/2.2,
+        axis.title.x = element_text(size = 6.5),
+        axis.text.y = element_text(colour = "black", size = 6),
+        axis.text.x = element_text(colour = "black", size = 5))
+save(go_plot_pt, file = "FINAL_PLOTS/plot_repository/go_plot_pt.RData")
+```
+
+
+
+Plot individual genes switchDE
+
+```{r}
+confIntSig = function(expr, gene, lv, precalc){
+  # this recalculates the parameters, but they match switchde
+  exp_gene = expr[gene,]
+  df = data.frame(exp_gene = exp_gene,
+                  lv = lv)
+  
+  mod1 = nls(exp_gene ~ SSlogis(lv, Asym, xmid, scal), 
+             start = precalc, data = df,
+             control = nls.control(minFactor = -10000, maxiter = 0, warnOnly = T))
+
+  pred_x <- seq(min(df$lv)-0.2, max(df$lv)+0.2, length = 1000)
+  
+  se.fit <- sqrt(apply(attr(predict(mod1, data.frame(lv = pred_x)),"gradient"),1,
+                       function(x) sum(vcov(mod1)*outer(x,x))))
+  
+  sig_int = cbind(pred_x, predict(mod1, data.frame(lv = pred_x))+outer(se.fit,qnorm(c(.5, .025,.975))))
+  colnames(sig_int) = c("x", "y", "low", "high")
+  
+  return(data.frame(sig_int))
+}
+
+plotSwitch = function(gene, par_df, exp_matrix, lv_df, lv = "LV0", info_table, bm.q, colour_pal, doscale = F, doInt = T){
+    ens_gene = as.character(bm.q[bm.q[,2]==gene, 1][1])
+    sel_genes = par_df[par_df$gene %in% ens_gene,]
+    plt_df = reshape2::melt(exp_matrix[ens_gene,])
+    plt_df = merge(plt_df, lv_df, by = 0)
+    plt_df = merge(plt_df, info_table, by.x = 1, by.y = 0)[,c("Row.names", "value", lv, "cl_annot")]
+    colnames(plt_df) = c("cell", "exp", lv, "cl_annot")
+    if(doscale) plt_df[,lv] = scale(plt_df[,lv])
+    
+    cells_df = plt_df[,c("cell", lv, "cl_annot")]
+    
+    colour_df = data.frame("gene" = gene,
+                           "col" = as.character(rainbow(length(sel_genes$gene))),
+                           "t0" = sel_genes$t0,
+                           "ensg" = sel_genes$gene)
+
+    plt_sig = ggplot() + 
+      geom_point(data = plt_df, aes_string(x = lv, y = "exp", colour = "cl_annot"), 
+                 shape = 19, size = 0.18)+
+      scale_colour_manual(values = colour_pal, name = "Subpopulation")+
+      ggtitle(gene)+
+      coord_cartesian(xlim = c(min(lv_df[,lv]), max(lv_df[,lv])))+
+      geom_vline(data = colour_df, aes(xintercept = t0), colour = "grey30", 
+                 linetype = 2, size = 0.5)+
+      scale_y_continuous(name = "log2(expression)")+
+      theme_classic()+
+      theme(legend.key.size = unit(0.75, units = "picas"),
+            plot.margin = unit(c(0, 0, 0, 0), "cm"),
+            legend.text = element_text(size = 5),
+            legend.title = element_text(size = 6, face = "bold"),
+            axis.text = element_text(size = 4, colour = "black"),
+            axis.ticks = element_line(size = 0.2),
+            axis.line = element_line(size = 0.4),
+            axis.title = element_text(size = 5),
+            aspect.ratio = 1,
+            panel.spacing = unit(0, "cm"),
+            plot.title = element_text(face = "bold.italic", size = 8))
+    
+    # sigmoid and confint (95%)
+    precalc_list = list("Asym" = sel_genes[,"mu0"]*2, 
+                          "xmid" = sel_genes[,"t0"], "scal" = 1/sel_genes[,"k"])
+    confint = confIntSig(expr = exp_matrix, gene = ens_gene, lv = plt_df[,lv],
+                         precalc = precalc_list)
+    
+    plt_sig = plt_sig + geom_line(data = confint, mapping = aes(x = x, y = y))+
+      geom_ribbon(data = confint, mapping = aes(x = x, ymin = low, ymax = high), alpha = 0.2)
+    
+   return(list("plot" = plt_sig+theme(legend.position = "none"), 
+               "legend" = cowplot::get_legend(plt_sig)))
+}
+
+metadata_colon = all_data_cl@meta.data[as.character(lv_proj_list$lv_colon_10x$cell),]
+metadata_colon$cl_annot = factor(metadata_colon$cl_annot)
+levels(metadata_colon$cl_annot) = list("Treg suppressive" = "Treg_suppressive", "Treg NLT" = "Treg_NLT",
+                                "Treg LT-like" = "Treg_LTlike", "Treg NLT-like" = "Treg_NLTlike",
+                                "eTreg" = "Treg_effector", "Treg Stat1" = "Treg_Stat1",
+                                "cTreg" = "Treg_lymphoid", "Tmem NLT" = "Tmem_NLT", 
+                                "Stress/low qual" = "lowQuality","Stress/low qual" = "Treg_stress")
+
+metadata_skin = all_data_cl@meta.data[as.character(lv_proj_list$lv_skinproj_10x$cell),]
+metadata_skin$cl_annot = factor(metadata_skin$cl_annot)
+levels(metadata_skin$cl_annot) = list("Treg suppressive" = "Treg_suppressive", "Treg NLT" = "Treg_NLT",
+                                "Treg LT-like" = "Treg_LTlike", "Treg NLT-like" = "Treg_NLTlike",
+                                "eTreg" = "Treg_effector", "Treg Stat1" = "Treg_Stat1",
+                                "cTreg" = "Treg_lymphoid", "Tmem NLT" = "Tmem_NLT", 
+                                "Stress/low qual" = "lowQuality","Stress/low qual" = "Treg_stress")
+
+ind_plot_list = list()
+for(g in c("Tcf7", "Bcl2", "Sell", "Tnfrsf9", "Rora", "Itgae", "Itgav", "Ikzf4", 
+           "Dgat2", "Il1rl1", "Kdm6b", "Areg", "Gpr65", "Evl","Pdcd1","Ccr8",
+           "Ccr2","Ccr5","Il10", "Cmtm7", "Gpr55","Gpr171","Gata3","Nfkb2",
+           "Nfkb1", "Tnfrsf4", "Tnfrsf18", "Rel","Ikzf3", "Irf4", "Stat3", 
+           "Gpr183", "Cxcr6", "Cxcr4", "Cxcr3", "Batf", "Bcl3","Skil")){
+  print(g)
+  ind_plot_list[[paste0(g, "_colon")]] = plotSwitch(gene = g, par_df = switch_used_vars$colon, 
+               exp_matrix = all_data_cl@data[,as.character(lv_proj_list$lv_colon_10x$cell)], 
+               lv_df = lv_proj_list$lv_colon_10x, 
+               lv = "LV0", info_table = metadata_colon, 
+               bm.q = gene_names, colour_pal = cl_treg_pal,
+               doscale = F, doInt = T)
+ 
+  ind_plot_list[[paste0(g, "_skin")]] = plotSwitch(gene = g, par_df = switch_used_vars$skin, 
+                 exp_matrix = all_data_cl@data[,as.character(lv_proj_list$lv_skinproj_10x$cell)], 
+                 lv_df = lv_proj_list$lv_skinproj_10x, lv = "LV0", 
+                 info_table = metadata_skin, bm.q = gene_names, colour_pal = cl_treg_pal,
+                 doscale = F, doInt = T)
+}
+
+pdf("test.pdf", width = 5, height = 5)
+lapply(ind_plot_list, function(x) plot_grid(x$plot))
+dev.off()
+
+save(ind_plot_list, file = "FINAL_PLOTS/plot_repository/ind_plot_list.Rdata")
+```
+
+
+
+Venn of genes correlated with LV
+
+```{r, fig.height=3, fig.width=3.2}
+cor_colon_10x = cor(t(as.matrix(all_data_cl@data[,as.character(lv_proj_list$lv_colon_10x$cell)])), 
+                    lv_proj_list$lv_colon_10x[,1:6], method = "sp")
+
+cor_skin_10x = cor(t(as.matrix(all_data_cl@data[,as.character(lv_proj_list$lv_skinproj_10x$cell)])), 
+                    lv_proj_list$lv_skinproj_10x[,1:6], method = "sp")
+
+cor_colon_ss2 = cor(t(as.matrix(sr_list$mouse_colon@data[,as.character(lv_proj_list$lv_colon_ss2$cell)])), 
+                    lv_proj_list$lv_colon_ss2[,1:6], method = "sp")
+
+cor_skin_ss2 = cor(t(as.matrix(sr_list$mouse_skin@data[,as.character(lv_proj_list$lv_skin_ss2$cell)])), 
+                    lv_proj_list$lv_skin_ss2[,1:6], method = "sp")
+
+list_cors = list(
+  cor_colon_10x = merge(cor_colon_10x, gene_names, by.x = 0, by.y = 1),
+  cor_skin_10x = merge(cor_skin_10x, gene_names, by.x = 0, by.y = 1),
+  cor_colon_ss2 = merge(cor_colon_ss2, gene_names, by.x = 0, by.y = 1),
+  cor_skin_ss2 = merge(cor_skin_ss2, gene_names, by.x = 0, by.y = 1)
+)
+
+list_cors_g = lapply(list_cors, function(x) x[abs(x[,2])>=0.25 & !is.na(x[,2]),1])
+
+venn_all = grid::gTree(children = VennDiagram::venn.diagram(list_cors_g, 
+                 print.mode = c('percent', 'raw'), sub.fontfamily = "Helvetica", sigdigs = 3, hyper.test = T,
+                 total.population = length(union(union(list_cors$cor_colon_10x$Row.names, list_cors$cor_colon_ss2),
+                                                 list_cors$cor_skin_ss2)),
+                 lower.tail = F,
+                 filename = NULL, fontfamily = "Helvetica", main.fontfamily = "Helvetica", verbose = F, 
+                 cat.fontfamily = "Helvetica", cat.cex = 1, cex = 0.65, sub.cex = 0.59))
+gridExtra::grid.arrange(venn_all)
+
+pairwise_int = crossprod(table(stack(lapply(list_cors_g, as.vector))))
+norm_int = reshape2::melt(pairwise_int/diag(pairwise_int))
+colnames(norm_int) = c("cor_1", "cor_2", "value")
+norm_int$value = round(norm_int$value*100, 2)
+levels(norm_int$cor_1) = levels(norm_int$cor_2) = list("Colon SS2" = "cor_colon_ss2",
+                              "Skin SS2" = "cor_skin_ss2",
+                              "Colon 10X" = "cor_colon_10x",
+                              "Skin 10X" = "cor_skin_10x")
+
+dotplot_pairs = ggplot(norm_int, aes(x = cor_1, y = cor_2))+
+  geom_point(mapping = aes(size = value, colour = value))+ 
+  geom_text(mapping = aes(label = value), nudge_y = 0.32, size = 2.5, fontface = "bold")+
+  scale_colour_viridis_c(option = "inferno", end = 0.9)+
+  scale_size_continuous(range = c(1.5, 6))+
+  scale_x_discrete(position = "top")+
+  guides(colour = guide_colourbar(title = "%", barwidth = 0.45, barheight = 4, 
+                                  order = 1), 
+         size = guide_legend(title = "%", order = 2))+
+  labs(x = "LV0 correlated genes", y = "LV0 correlated genes")+
+  theme_classic()+
+  theme(aspect.ratio = 1,
+        axis.text.y = element_text(size = 6, colour = "black"),
+        axis.text.x.top = element_text(size = 6, colour = "black", 
+                                   hjust = 0, vjust = 0, angle = 32),
+        axis.title = element_text(size = 7, colour = "black"),
+        legend.text = element_text(size = 5),
+        legend.title = element_text(size = 5.5),
+        legend.box.spacing = unit(0.05, "cm"),
+        legend.background = element_blank())
+
+save(dotplot_pairs, file = "FINAL_PLOTS/plot_repository/dotplot_pairs.RData")
+```
+
+
+
+BGPLVM SS2
+
+```{r, fig.height=3, fig.width=3}
+# LV0, LV5; LV0, LV3
+bgplvm_ss2_plots = list()
+for(n in names(lv_proj_list)[3:4]){
+  plot_df = merge(labs_meta_ss2, lv_proj_list[[n]], by.x = 0, by.y = "cell")
+  levels(plot_df$labs) = list("Treg suppressive" = "Treg_suppressive", "Treg NLT" = "Treg_NLT",
+                              "Treg LT-like" = "Treg_LTlike", "Treg NLT-like" = "Treg_NLTlike",
+                              "eTreg" = "Treg_effector", "Treg Stat1" = "Treg_Stat1",
+                              "cTreg" = "Treg_lymphoid", "Stress/low qual" = "Treg_stress")
+  plot_df = plot_df[order(plot_df$labs),]
+  plot_df$tissue_cell = gsub(".", " ", as.character(plot_df$tissue_cell), fixed = T)
+  plot_df$tissue_cell = factor(plot_df$tissue_cell, levels = c("colon Treg", "skin Treg", "LN Treg"))
+  
+  if(n==names(lv_proj_list)[3]){
+    lv1 = "LV0"
+    lv2 = "LV5"
+  } else{
+    lv1 = "LV0"
+    lv2 = "LV3"
+    plot_df$LV0 = -plot_df$LV0
+  }
+
+  bgplvm = ggplot(plot_df, aes_string(x = lv1, y = lv2, 
+                                      colour = "labs", shape = "tissue_cell"))+
+    geom_point(size = 0.9)+
+    scale_colour_manual(values = c(cl_treg_pal, "Stress/low qual" = "#c6c6c6"))+
+    labs(colour = "Assigned\nLabels", shape = "Sorted\nTissue/Cell Type")+
+    scale_shape_manual(values = c("colon Treg" = 19, "LN Treg" = 1, "skin Treg" = 19))+
+    theme_classic()+
+    tsne_theme+
+    theme(axis.text = element_text(colour = "black", size = 5),
+          axis.title = element_text(colour = "black", size = 6),
+          axis.ticks = element_line())
+  
+  if(n==names(lv_proj_list)[3]){
+    bgplvm = bgplvm + 
+      coord_cartesian(xlim = c(-1.7, 2), ylim = c(-3,3))
+  }
+  
+  dens_plot = ggplot(plot_df, aes_string(x = lv1,  fill = "labs"))+
+    geom_histogram(bins = 40)+
+    scale_fill_manual(values = c(cl_treg_pal, "Stress/low qual" = "#c6c6c6"))+
+    labs(fill = "Assigned\nLabels")+
+    theme_classic()+
+    tsne_theme+
+    theme(aspect.ratio = NULL,
+          axis.title.x = element_text(colour = "black", size = 6),
+          axis.ticks = element_line(),
+          axis.text = element_text(colour = "black", size = 5),
+          legend.position = "none")
+  
+  if(n==names(lv_proj_list)[3]){
+    dens_plot = dens_plot + 
+      scale_x_continuous(limits = c(-1.7, 2)) # remove two outliears in colon
+  }
+  
+  leg = get_legend(bgplvm)
+  plts = plot_grid(bgplvm+theme(legend.position = "none"),
+                   dens_plot, nrow = 2, 
+                   rel_heights = c(1, 0.5), align = "v")
+  
+  bgplvm_ss2_plots[[n]] = plot_grid(plts, leg, ncol = 2, rel_widths = c(1, 0.5))
+}
+save(bgplvm_ss2_plots, file = "FINAL_PLOTS/plot_repository/bgplvm_ss2_plots.RData")
+```
+
+
+
+ARD plots
+
+```{r}
+ard_bgplvm_plots = list()
+for(n in names(ard_bgplvm_list)){
+  ard_bgplvm_list[[n]][,1] = rownames(ard_bgplvm_list[[n]])
+
+  ard_bgplvm_plots[[n]] = ggplot(ard_bgplvm_list[[n]], aes(x = X, y = X0))+
+    geom_bar(stat = "identity", position = "dodge", fill = "black")+
+    labs(x = "Latent Variable", y = "ARD value")+
+    theme_bar+
+    theme(plot.margin = unit(c(0.6,0.27,0.2,0.2),"lines"),
+          axis.title.x = element_text(colour = "black", size = 5))
+}
+save(ard_bgplvm_plots, file = "FINAL_PLOTS/plot_repository/ard_bgplvm_plots.RData")
+```
+
+
+### Clonotypes
+Add AB clonotypes
+
+```{r}
+meta_list = list()
+for(n in names(sr_list)){
+    info_tab = sr_list[[n]]@meta.data
+    info_tab = info_tab[info_tab$clonotypes!="notAssigned",
+                        grepl("tracer", colnames(info_tab)) | colnames(info_tab) %in% c("tissue_cell",
+                                                                                        "t_c_cond",
+                                                                                        "clonotypes")]
+    
+    labs_chains = rep(c("A", "B", "G", "D"), each = 2)
+    mat_chains = matrix("", nrow(info_tab), nrow(info_tab))
+    rownames(mat_chains) = rownames(info_tab)
+    colnames(mat_chains) = rownames(info_tab)
+    for(i in 1:nrow(info_tab)){
+        for(j in 1:nrow(info_tab)){
+            for(k in 4:11){
+                if(as.character(info_tab[i,k]) %in% as.character(unlist(info_tab[j,4:11])) &
+                   info_tab[i,k]!="No" & info_tab[i,k+8]=="Yes"){
+                    mat_chains[i,j] = paste0(mat_chains[i,j], labs_chains[k-3])
+                }
+            }
+        }
+    }
+    
+    mat_melt = reshape2::melt(mat_chains)
+    mat_melt = mat_melt[mat_melt[,1]!=mat_melt[,2] & grepl("AB", mat_melt[,3]),]
+    
+    clABlist = list()
+    for(i in 1:nrow(mat_melt)){
+        if(any(unlist(lapply(clABlist, function(x) mat_melt[i,1] %in% x)))){
+            clABlist[[which(unlist(lapply(clABlist, function(x) mat_melt[i,1] %in% x)))]] = c(clABlist[[which(unlist(lapply(clABlist, function(x) mat_melt[i,1] %in% x)))]], as.character(unlist(mat_melt[i,1:2])))
+        } else if(any(unlist(lapply(clABlist, function(x) mat_melt[i,2] %in% x)))){
+            clABlist[[which(unlist(lapply(clABlist, function(x) mat_melt[i,2] %in% x)))]] = c(clABlist[[which(unlist(lapply(clABlist, function(x) mat_melt[i,2] %in% x)))]], as.character(unlist(mat_melt[i,1:2])))
+        } else{
+            clABlist[[length(clABlist)+1]] = as.character(unlist(mat_melt[i,1:2]))
+        }
+    }
+    clABlist = lapply(clABlist, unique)
+    names(clABlist) = paste0("clAB", 1:length(clABlist))
+    clABlist = reshape2::melt(clABlist)
+    colnames(clABlist) = c("cell_name", "clAB")
+    
+    meta_list[[n]] = merge(sr_list[[n]]@meta.data, clABlist, by.x = 0, by.y = "cell_name", all.x = T)
+    rownames(meta_list[[n]]) = meta_list[[n]][,1]
+    meta_list[[n]] = meta_list[[n]][,-1]
+    meta_list[[n]]$clAB[is.na(meta_list[[n]]$clAB)] = "notAssigned"
+    meta_list[[n]] = merge(meta_list[[n]], sr_list[[n]]@dr$tsne@cell.embeddings, by = 0)
+}
+```
+
+
+
+tSNE clonotypes
+
+```{r}
+cl_tsne_list = list()
+for(dataset in names(meta_list)){
+    for(cc in c("clonotypes", "clAB")){
+    
+        tsne_df = meta_list[[dataset]]
+        colnames(tsne_df)[which(grepl(cc, x = colnames(tsne_df)))] = "classes"
+        colnames(tsne_df)[which(grepl("tissue_cell", x = colnames(tsne_df)))] = "cond"
+        tsne_df$classes = factor(tsne_df$classes, levels = unique(tsne_df$classes)[order(unique(as.character(tsne_df$classes)))])
+        tsne_df$cl_size = factor(ifelse(tsne_df$classes=="notAssigned", "no", "yes"), levels = c("no", "yes"))
+        
+        tsne_df$Tumour = ifelse(grepl("Tumour", tsne_df$t_c_cond), "Tumour", "Control")
+
+        cl_df = tsne_df[tsne_df$classes!="notAssigned", c("tSNE_1", "tSNE_2", "classes","cond")]
+        
+        n_cl1 = length(unique(tsne_df$classes))-1
+        col_vec = c(colours_clon[1:n_cl1], "#7e7e7e")
+        
+        if(grepl("human", dataset)){
+            shape_vals = c(10, 1, 19, 12, 0, 15, 11, 2, 17)
+        } else{
+            shape_vals = c(1, 19, 0, 15, 2, 17)
+        }
+    
+        plot_tsne = ggplot(data = tsne_df, aes(x = tSNE_1, y = tSNE_2, shape = cond))
+        if(grepl("mel", dataset)){
+            plot_tsne = plot_tsne + geom_point(aes(colour = classes, fill = classes, size = Tumour), alpha = 0.8)+
+                geom_line(data = cl_df, aes(x = tSNE_1, y = tSNE_2, colour = classes, group = classes), size = 1.06, show.legend = F)+
+                scale_size_manual(values = c(1, 2.25), guide = T)
+        } else{
+            plot_tsne = plot_tsne + geom_point(aes(colour = classes, fill = classes, size = cl_size), alpha = 0.8)+
+                geom_line(data = cl_df, aes(x = tSNE_1, y = tSNE_2, colour = classes, group = classes), size = 1.06, show.legend = F)+
+                scale_size_manual(values = c(1, 2.02), guide = F)
+        }
+    
+        plot_tsne = plot_tsne + 
+            scale_shape_manual(values = shape_vals)+
+            guides(shape = guide_legend(nrow = 3))+
+            scale_colour_manual(values = col_vec)+
+            tsne_theme+
+          theme(legend.spacing = unit(0.2, "cm"))
+        
+        if(grepl("_mel", dataset)){ 
+            plot_tsne = plot_tsne + guides(colour = "none", size = guide_legend(nrow = 3), fill = "none", 
+                                           shape = guide_legend(title = "Tissue/Cell", ncol = 1, byrow = T))
+        } else if(grepl("human", dataset)){
+            plot_tsne = plot_tsne + guides(shape = guide_legend(title = "Tissue/Cell", ncol = 1, byrow = T), 
+                                           colour = "none", fill = "none", size = "none")
+        } else{
+            plot_tsne = plot_tsne + guides(colour = "none", size = "none", fill = "none", 
+                                           shape = guide_legend(title = "Tissue/Cell", ncol = 1, byrow = T))
+        }
+        
+        cl_tsne_list[[paste0(dataset, "_", cc)]] = plot_tsne
+    }
+}
+save(cl_tsne_list, file = "./FINAL_PLOTS/plot_repository/cl_tsne_list.RData")
+```
+
+
+
+Counts within and between tissues
+
+```{r, fig.width=4, fig.height=4}
+cl_tab_match_list = list()
+for(n in names(meta_list)){
+    matrix_list = list()
+    for(cc in c("clonotypes", "clAB")){
+        tsne_df = meta_list[[n]]
+        colnames(tsne_df)[which(grepl(cc, x = colnames(tsne_df)))] = "classes"
+        colnames(tsne_df)[which(grepl("tissue_cell", x = colnames(tsne_df)))] = "cond"
+        tsne_df$classes = factor(tsne_df$classes, levels = unique(tsne_df$classes)[order(unique(as.character(tsne_df$classes)))])
+        
+        tsne_df = tsne_df[tsne_df$classes!="notAssigned",]
+        
+        matrix_counts = matrix(rep(0, length(levels(tsne_df$cond))**2), 
+                               length(levels(tsne_df$cond)), length(levels(tsne_df$cond)))
+        rownames(matrix_counts) = levels(tsne_df$cond)
+        colnames(matrix_counts) = levels(tsne_df$cond)
+        for(cl in unique(tsne_df$classes)){
+            sub_tsne_df = tsne_df[tsne_df$classes==cl,c("cond")]
+            
+            x = t(combn(sub_tsne_df, 2))
+            x.sort = t(apply(x, 1, sort))
+            cor_mat = x[!duplicated(x.sort),]
+            if(!is.matrix(cor_mat)){
+                cor_mat = matrix(cor_mat, 1, 2)
+            }
+            for(i in 1:nrow(cor_mat)){
+                matrix_counts[cor_mat[i,1],cor_mat[i,2]] = matrix_counts[cor_mat[i,1],cor_mat[i,2]] +1
+                if(cor_mat[i,2]!=cor_mat[i,1]){
+                    matrix_counts[cor_mat[i,2],cor_mat[i,1]] = matrix_counts[cor_mat[i,2],cor_mat[i,1]] +1
+                }
+            }
+        }
+        matrix_list[[cc]] = matrix_counts
+    }
+    
+    intra_pop_cl = data.frame("All" = diag(matrix_list[[1]]), "AB" = diag(matrix_list[[2]]))
+    inter_pop_cl = matrix_list[[1]]
+    gdata::lowerTriangle(inter_pop_cl) = gdata::lowerTriangle(matrix_list[[2]])
+    diag(inter_pop_cl) = rep(max(inter_pop_cl)+1, length(diag(inter_pop_cl)))
+    lab_mat = matrix(as.character(inter_pop_cl), nrow(inter_pop_cl), ncol(inter_pop_cl))
+    diag(lab_mat) = ""
+    
+    diag(inter_pop_cl) = -1
+    cl_tab_match_list[[paste0(n, "_inter")]] = pheatmap::pheatmap(inter_pop_cl,  show_rownames = T, show_colnames = T, 
+                                                                  display_numbers = lab_mat, cluster_rows = F, 
+                                                                  cluster_cols = F, annotation_colors = ann_col, 
+                                                                  color = c("white", viridis::viridis(200)[76:200]), 
+                                                                  fontsize = 7.5, fontsize_number = 6.5, 
+                                                                  legend = F, number_color = "black", border_color = "white")$gtable
+    cl_tab_match_list[[paste0(n, "_intra")]] = pheatmap::pheatmap(intra_pop_cl, show_rownames = T, show_colnames = T, 
+                                                                  display_numbers = round(intra_pop_cl, 0), 
+                                                                  color = c(viridis::viridis(200)[76:200]), fontsize = 7.5, 
+                                                                  fontsize_number = 6.5, legend = F, number_color = "black", 
+                                                                  border_color = "white", cluster_cols = F, cluster_rows = F)$gtable
+}
+save(cl_tab_match_list, file = "./FINAL_PLOTS/plot_repository/cl_tab_match_list.RData")
+```
+
+
+
+## Assemble Figures
+Figure 3
+
+```{r, fig.width=5.7, fig.height=6.2}
+load("FINAL_PLOTS/plot_repository/bgplvm_distrib.RData")
+load("FINAL_PLOTS/plot_repository/go_plot_pt.RData")
+load("FINAL_PLOTS/plot_repository/ind_plot_list.Rdata")
+
+fig_top = plot_grid(bgplvm_distrib, plot_grid(NULL, go_plot_pt, NULL, nrow = 3, rel_heights = c(0.12, 1, .09)),
+                    ncol = 2, rel_widths = c(.45, 1), labels = c("A", "C"))
+fig_bot = plot_grid(ind_plot_list$Sell_colon$plot, ind_plot_list$Tcf7_colon$plot, 
+                    ind_plot_list$Rora_colon$plot, ind_plot_list$Tnfrsf9_colon$plot,
+                    ind_plot_list$Sell_skin$plot, ind_plot_list$Tcf7_skin$plot, 
+                    ind_plot_list$Rora_skin$plot, ind_plot_list$Tnfrsf9_skin$plot,
+                    ncol = 4, nrow = 2, align = "hv")
+
+fig3 = plot_grid(fig_top, NULL, fig_bot, nrow = 3, 
+                 rel_heights = c(1, 0.07, 0.9), labels = c("", "", "B"))
+
+ggsave(fig3, filename = "FINAL_PLOTS/Figures/Figure03.pdf", paper = "a4", 
+       height = 6.2, width = 5.7, useDingbats = F)
+```
+
+
+
+Supplementary Figure 5
+
+```{r}
+load("./FINAL_PLOTS/plot_repository/cl_tsne_list.RData")
+load("./FINAL_PLOTS/plot_repository/cl_tab_match_list.RData")
+
+sup5 = cowplot::plot_grid(cl_tsne_list$mouse_colon_clAB + ggtitle("Mouse Colon") + theme(plot.title = element_text(size = 9)),
+                   cl_tab_match_list$mouse_colon_inter, cl_tab_match_list$mouse_colon_intra,
+                   cl_tsne_list$mouse_skin_clAB + ggtitle("Mouse Skin") + theme(plot.title = element_text(size = 9)),
+                   cl_tab_match_list$mouse_skin_inter, cl_tab_match_list$mouse_skin_intra,
+                   cl_tsne_list$mouse_mel_clAB + ggtitle("Mouse Melanoma") + theme(plot.title = element_text(size = 9)),
+                   cl_tab_match_list$mouse_mel_inter, cl_tab_match_list$mouse_mel_intra,
+                   cl_tsne_list$human_clAB + ggtitle("Human") + theme(plot.title = element_text(size = 9)),
+                   cl_tab_match_list$human_inter, cl_tab_match_list$human_intra,
+                   ncol = 3, rel_widths = c(1, 0.75, 0.47), align = "hv", labels = c("A", "", "", "B", "", "", "C", "", "", "D", "", ""))
+
+ggsave(sup5, filename = "FINAL_PLOTS/Figures/SupplementaryFigure05.pdf", paper = "a4", 
+       width = 7.9, height = 9.8, useDingbats = F)
+```
+
+
+
+Supplementary Figure 6
+
+```{r}
+load("FINAL_PLOTS/plot_repository/bgplvm_ss2_plots.RData")
+load("FINAL_PLOTS/plot_repository/ard_bgplvm_plots.RData")
+load("FINAL_PLOTS/plot_repository/dotplot_pairs.RData")
+load("FINAL_PLOTS/plot_repository/sup_bgplvm.RData")
+
+ard_top1 = plot_grid(ard_bgplvm_plots$ard_colon_10x, ard_bgplvm_plots$ard_skin_10x,
+                     nrow = 2, align = "v")
+ard_top2 = plot_grid(ard_bgplvm_plots$ard_colon_ss2, ard_bgplvm_plots$ard_skin_ss2,
+                     nrow = 2, align = "v")
+fig_top = plot_grid(ard_top1, NULL, sup_bgplvm,  NULL, ard_top2, ncol = 5, 
+                    rel_widths = c(0.75, 0.5, 1, 0.5, 0.75), labels = c("A", "", "B", "", "C"))
+
+fig_mid = plot_grid(bgplvm_ss2_plots$lv_colon_ss2, bgplvm_ss2_plots$lv_skin_ss2, dotplot_pairs,
+                    ncol = 3, rel_widths = c(1, 1, 1), labels = c("D", "E", "F"))
+
+fig_bot = plot_grid(NULL, labels = c("G"))
+
+sup6 = plot_grid(fig_top, NULL, fig_mid, NULL, fig_bot, nrow = 5, 
+                 rel_heights = c(1.5, 0.14, 1.5, 0.08, 1))
+
+ggsave(sup6, filename = "FINAL_PLOTS/Figures/SupplementaryFigure06.pdf", paper = "a4", 
+       height = 8.3, width = 7.5, useDingbats = F)
+```
+
+
+
+# Figure 4
+Load data
+
+```{r}
+load("saved_data/SS2/sr_list_SS2.RData")
+mrd_lvs = read.csv("plots/SS2/MRD_melanoma/latent_variables_MRD_LNskinTreg.csv",
+                   header = T, row.names = 1)
+mrd_ard = read.csv("plots/SS2/MRD_melanoma/ARD_MRD_LNskinTreg.csv",
+                   header = T, row.names = 1)
+
+bgplvm_lv_ind = list("Control" = read.csv("plots/SS2/MRD_melanoma/latent_variables_Treg_mel_bLN_skin_Control.csv", header = T, row.names = 1), 
+                   "Tumour" = read.csv("plots/SS2/MRD_melanoma/latent_variables_Treg_mel_bLN_skin_Tumour.csv", header = T, row.names = 1))
+bgplvm_ard_ind = list("Control" = read.csv("plots/SS2/MRD_melanoma/ARD_Treg_mel_bLN_skin_Control.csv", header = T, row.names = 1), 
+                      "Tumour" = read.csv("plots/SS2/MRD_melanoma/ARD_Treg_mel_bLN_skin_Tumour.csv", header = T, row.names = 1))
+
+gene_groups = read.csv("plots/SS2/MRD_melanoma/gene_groups.csv", header = T, row.names = 1, stringsAsFactors = F)
+
+labs_meta_ss2 = read.csv("plots/10X/LR/preds_metadata_Treg_SS2_allTreg10X.csv", header= T, row.names = 1)
+
+load("plots/SS2/MRD_melanoma/switch_lv9_results.RData")
+```
+
+
+
+## Make plots
+tSNE melanoma
+
+```{r, fig.width=3.5, fig.height=2.8}
+plot_df = merge(sr_list$mouse_mel@dr$tsne@cell.embeddings, 
+                sr_list$mouse_mel@meta.data[,c("tissue_cell", "condition", "cell.type")], by = 0)
+plot_df$tissue_cell = factor(gsub(".", " ", as.character(plot_df$tissue_cell), fixed = T), 
+                             levels = gsub(".", " ", levels(plot_df$tissue_cell), fixed = T))
+
+mel_tsne = ggplot(plot_df, aes(x = tSNE_1, y = tSNE_2, 
+                               shape = tissue_cell, colour = condition))+
+  geom_point(size = 0.8)+
+  scale_colour_manual(values = colours_mel)+
+  scale_shape_manual(values = c(1, 19, 0, 15, 2, 17))+
+  guides(shape = guide_legend(override.aes = list(size = 1)))+
+  labs(colour = "Condition", shape = "Tissue/Cell Type")+
+  theme_classic()+
+  tsne_theme
+
+save(mel_tsne, file = "FINAL_PLOTS/plot_repository/mel_tsne.RData")
+```
+
+
+
+tSNE melanoma cell cycle
+
+```{r, fig.width=3.5, fig.height=2.8}
+plot_df = merge(sr_list$mouse_mel@dr$tsne@cell.embeddings, 
+                sr_list$mouse_mel@meta.data[,c("tissue_cell", "condition", 
+                                               "cell.type", "cellcycle")], by = 0)
+plot_df$tissue_cell = factor(gsub(".", " ", as.character(plot_df$tissue_cell), fixed = T), 
+                             levels = gsub(".", " ", levels(plot_df$tissue_cell), fixed = T))
+plot_df$cellcycle = factor(plot_df$cellcycle, levels = c("G1", "S", "G2M"))
+
+mel_tsne_cc = ggplot(plot_df, aes(x = tSNE_1, y = tSNE_2, 
+                               shape = tissue_cell,
+                               size = condition,
+                               colour = cellcycle))+
+  geom_point(alpha = 0.6)+
+  scale_size_manual(values = c(0.8, 2))+
+  scale_colour_manual(values = c("G1" = "grey45", "S" = "#ff661a", "G2M" = "#ff0000"))+
+  scale_shape_manual(values = c(1, 19, 0, 15, 2, 17))+
+  guides(shape = guide_legend(override.aes = list(size = 1), order = 2),
+         colour = guide_legend(order = 1), size = guide_legend(order = 3))+
+  labs(colour = "Cell Cycle stage", shape = "Tissue/Cell Type", size = "Condition")+
+  theme_classic()+
+  tsne_theme+
+  theme(legend.margin = margin(0, 0, 0, 0),
+        legend.box.margin = margin(1, 1, 1, 6))
+
+save(mel_tsne_cc, file = "FINAL_PLOTS/plot_repository/mel_tsne_cc.RData")
+```
+
+
+
+Volcano Plot
+
+```{r, fig.width=2.5, fig.height=2.5}
+load("plots/SS2/DE/de_ss_mel_ss2.RData")
+
+plot_df = de_ss_mel_ss2$skin
+plot_df = merge(gene_groups, plot_df, by = 1, all.y = T)
+plot_df$L1[is.na(plot_df$L1)] = "Other"
+plot_df$L1 = factor(plot_df$L1, levels = c("Skin", "LT", "Cell Cycle", "Other"))
+
+labs_df = plot_df[plot_df$V2 %in% c("Il1rl1", "Lmna", "Lag3", "Gimap7","Kdm6b","Pim1",
+                                    "Ly6a","Actb","Ccl5","Cxcr3","Erdr1"),]
+
+volc_plot_mel = ggplot()+
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed")+
+  geom_vline(xintercept = c(-.25, .25), linetype = "dashed")+
+  geom_point(data = plot_df, mapping = aes(x = avg_logFC, y = -log10(p_val_adj),
+                                           colour = L1), size = 0.8)+
+  ggrepel::geom_label_repel(data = labs_df, mapping = aes(x = avg_logFC, y = -log10(p_val_adj),
+                                                          colour = L1, label = V2), 
+                            show.legend = F, size = 2.3, min.segment.length = 0, 
+                            label.padding = unit(0.05, "cm"))+
+  scale_colour_manual(values = col_mel_gene_groups)+
+  scale_x_continuous(limits = c(-2.5,2.5))+
+  labs(x = "average logFC", y = "-log10(adjusted p-value)")+
+  theme_classic()+
+  de_theme+
+  theme(panel.grid = element_blank(),
+        legend.box.background = element_rect(colour = "black"),
+        legend.key.size = unit(0.2, "cm"),
+        legend.position = c(0.14,.87),
+        legend.margin = margin(0.2,1,0.2,0),
+        legend.key = element_blank())
+
+save(volc_plot_mel, file = "FINAL_PLOTS/plot_repository/volc_plot_mel.RData")
+```
+
+
+
+MRD BGPLVM
+
+```{r, fig.width=2.5, fig.height=3.33}
+# LV9 and LV5 are reversed
+plot_df = merge(mrd_lvs, 
+                sr_list$mouse_mel@meta.data[,c("t_c_cond", "cellcycle", "tissue", "condition")], by = 0)
+plot_df$t_c_cond = factor(gsub(".", " ", as.character(plot_df$t_c_cond), fixed = T), 
+                          levels = gsub(".", " ", unique(plot_df$t_c_cond)[c(2,1,3,4)], fixed = T))
+plot_df$cellcycle = factor(plot_df$cellcycle, levels = c("G1", "S", "G2M"))
+
+mel_mrd = ggplot(plot_df, aes(x = -LV9, y = -LV5, 
+                              shape = t_c_cond, colour = t_c_cond))+
+  geom_point(size = 0.8)+
+  scale_colour_manual(values = sort_pal[c(1,2,8,7)])+
+  scale_shape_manual(values = c(19, 19, 17, 17))+
+  guides(shape = guide_legend(override.aes = list(size = 1)))+
+  labs(colour = "Tissue/Cell/Condition", shape = "Tissue/Cell/Condition", 
+       y = "LV5 (Cell Cycle)")+
+  tsne_theme+
+  theme(axis.title.x = element_blank(),
+        axis.ticks = element_line(),
+        axis.text = element_text(colour = "black", size = 6), 
+        plot.margin = unit(c(0.3,0.3,0,0), "cm"))
+
+tcc_dens = ggplot(plot_df, aes(x = -LV9, fill = t_c_cond))+
+  geom_density(alpha = 0.7, colour = "grey20")+
+  scale_fill_manual(values = sort_pal[c(1,2,8,7)])+
+  scale_y_continuous(breaks = c(0, 0.5, 1))+
+  tsne_theme+
+  theme(aspect.ratio = 1/3,
+        axis.title.x = element_blank(),
+        axis.ticks = element_line(),
+        axis.text = element_text(colour = "black", size = 6),
+        legend.position = "none", 
+        plot.margin = unit(c(0,0.3,0,0), "cm"))
+
+cc_dens = ggplot(plot_df, aes(x = -LV9, fill = cellcycle))+
+  geom_density(alpha = 0.7, colour = "grey20")+
+  scale_fill_manual(values = col_cc)+
+  labs(x = "LV9 (Tissue)", fill = "Cell Cycle Stage")+
+  tsne_theme+
+  theme(aspect.ratio = 1/3,
+        legend.key.size = unit(0.3, "cm"),
+        axis.ticks = element_line(),
+        axis.text = element_text(colour = "black", size = 6), 
+        plot.margin = unit(c(0,0.3,0,0), "cm"))
+
+leg1 = get_legend(mel_mrd)
+leg2 = get_legend(cc_dens)
+
+plts = plot_grid(mel_mrd+theme(legend.position = "none"), 
+          tcc_dens, 
+          cc_dens+theme(legend.position = "none"), 
+          rel_heights = c(1, 0.5, 0.5), nrow = 3, align = "v")
+legs = plot_grid(NULL, leg1, leg2, NULL, nrow = 4, align = "v")
+
+mrd_mel_build = patchworkGrob(plts + legs + plot_layout(widths = c(1, 0.5)))
+plot_grid(mrd_mel_build)
+mrd_plt_list = list("build" = mrd_mel_build, "plts" = plts, "legs" = legs)
+save(mrd_plt_list, file = "FINAL_PLOTS/plot_repository/mrd_plt_list.RData")
+```
+
+
+
+t0 difference
+
+```{r, fig.height=2.5, fig.width=2.7}
+# only signifficant ones that are within both trajectories
+plot_df = switch_lv9[switch_lv9$inInterval=="Both" & switch_lv9$isSig,]
+
+t.test(plot_df$t0_Control[switch_lv9$isSig], plot_df$t0_Tumour[switch_lv9$isSig]) # it's also not sig if they are outside traj
+
+cor(switch_lv9$t0_Control[switch_lv9$isSig], 
+    switch_lv9$t0_Tumour[switch_lv9$isSig], method = "sp")
+cor(plot_df$t0_Control, plot_df$t0_Tumour, method = "sp")
+
+cor(plot_df[plot_df$Group=="Skin", "t0_Control"], plot_df[plot_df$Group=="Skin", "t0_Tumour"], method = "sp")
+cor(plot_df[plot_df$Group=="Other", "t0_Control"], plot_df[plot_df$Group=="Other", "t0_Tumour"], method = "sp")
+cor(plot_df[plot_df$Group=="LT", "t0_Control"], plot_df[plot_df$Group=="LT", "t0_Tumour"], method = "sp")
+cor(plot_df[plot_df$Group=="Cell Cycle", "t0_Control"], plot_df[plot_df$Group=="Cell Cycle", "t0_Tumour"], method = "sp")
+
+plot_df$Group = factor(gsub("Cell Cycle", "Cell\nCycle", plot_df$Group), 
+                       levels = c("Other", "Cell\nCycle", "LT", "Skin"))
+
+t0_diff = ggplot(plot_df, aes(x = Group, y = t0_diff, colour = Group))+
+  geom_point(position = position_jitter(width = 0.1), size = 0.85)+
+  stat_summary(colour = "black", shape = 1, size = 0.5)+
+  scale_colour_manual(values = rev(col_mel_gene_groups))+
+  geom_hline(yintercept = t(mean_se(plot_df$t0_diff)[1,2:3]), 
+             linetype = "dashed")+
+  labs(y = "t0 difference (Control - Tumour)", x = "Gene Groups")+
+  coord_flip()+
+  de_theme+
+  theme(panel.grid = element_blank(),
+        legend.position = "none")
+
+save(t0_diff, file = "FINAL_PLOTS/plot_repository/t0_diff.RData")
+```
+
+
+
+Gene %
+
+```{r}
+is_exp = sr_list$mouse_mel@data>0
+sub_is_exp = is_exp[,sr_list$mouse_mel@meta.data$t_c_cond %in% c("LN.Treg.Tumour", "LN.Treg.Control")]
+meta_is_exp = sr_list$mouse_mel@meta.data[sr_list$mouse_mel@meta.data$t_c_cond %in% c("LN.Treg.Tumour", "LN.Treg.Control"),]
+
+genes_of_int = c("Id2", "Batf", "Nfil3", "Lgals1", "Ccr8", "Samsn1")
+ens_g = gene_names[match(genes_of_int, gene_names$V2), 1]
+
+mat_perc = apply(as.matrix(sub_is_exp[ens_g,]), 1, function(x) tapply(x, meta_is_exp$t_c_cond, sum))/as.vector(table(meta_is_exp$t_c_cond))
+colnames(mat_perc) = gene_names[match(colnames(mat_perc), gene_names$V1), 2]
+
+mat_perc
+```
+
+
+
+MRD ARD plots
+
+```{r, fig.height=2, fig.width = 3}
+colnames(mrd_ard) = paste0("LV", 0:11)
+mrd_ard$genes_class = rownames(mrd_ard)
+
+plot_df = reshape2::melt(mrd_ard)
+plot_df$genes_class = factor(plot_df$genes_class)
+levels(plot_df$genes_class) = list("Tissue" = "tissue", "Cell Cycle" = "cellcycle", "Other" = "other")
+
+mrd_ard_plot = ggplot(plot_df, aes(x = variable, y = value, fill = genes_class))+
+  geom_bar(stat = "identity", position = "dodge")+
+  scale_fill_manual(values = col_mel_gene_groups[c(1,3,4)])+
+  labs(fill = "Gene group", x = "Latent Variable", y = "ARD value")+
+  theme_bar+
+  theme(legend.position = c(0.12, 0.85),
+        plot.margin = unit(c(0.6,0.27,0.2,0.2),"lines"))
+
+save(mrd_ard_plot, file = "FINAL_PLOTS/plot_repository/mrd_ard_plot.RData")
+```
+
+
+
+Individual BGPLVM
+
+```{r}
+bgplvm_ind_plots = list()
+for(n in names(bgplvm_lv_ind)){
+  plot_df = merge(sr_list$mouse_mel@meta.data, bgplvm_lv_ind[[n]], by.x = 0, by.y = "cell")
+  plot_df = plot_df[order(plot_df$t_c_cond),]
+  plot_df$t_c_cond = gsub(".", " ", as.character(plot_df$t_c_cond), fixed = T)
+  plot_df$LV1 = -plot_df$LV1
+  plot_df$LV0 = -plot_df$LV0
+
+  bgplvm_ind_plots[[n]] = ggplot(plot_df, aes(x = LV1, y = LV0, colour = t_c_cond))+
+    geom_point(shape = 19, size = 0.25)+
+    scale_colour_manual(values = unname(cl_treg_pal[c(3,5)]))+
+    guides(colour = guide_legend(title = "Tissue/Cell Type/Contition", 
+                                 title.position = "top"))+
+    theme_classic()+
+    tsne_theme+
+    theme(plot.margin = unit(c(0,0.1,0,0), "cm"),
+          axis.text = element_text(colour = "black", size = 5),
+          axis.title = element_text(colour = "black", size = 6),
+          axis.ticks = element_line(),
+          legend.position = "bottom")
+}
+
+save(bgplvm_ind_plots, file = "FINAL_PLOTS/plot_repository/bgplvm_ind_plots.RData")
+```
+
+
+
+Individual correspondence dotplot
+
+```{r, fig.width=3.5, fig.height=3.5}
+cor_both_mrd = cor(t(as.matrix(sr_list$mouse_mel@data[,as.character(mrd_lvs$cell)])), 
+                  mrd_lvs[,1:12], method = "sp")
+
+cor_control = cor(t(as.matrix(sr_list$mouse_mel@data[,as.character(bgplvm_lv_ind$Control$cell)])), 
+                  bgplvm_lv_ind$Control[,1:6], method = "sp")
+
+cor_tumour = cor(t(as.matrix(sr_list$mouse_mel@data[,as.character(bgplvm_lv_ind$Tumour$cell)])), 
+                  bgplvm_lv_ind$Tumour[,1:6], method = "sp")
+
+list_cors = list(
+  Both = merge(cor_both_mrd, gene_names, by.x = 0, by.y = 1),
+  Control = merge(cor_control, gene_names, by.x = 0, by.y = 1),
+  Tumour = merge(cor_tumour, gene_names, by.x = 0, by.y = 1)
+)
+
+list_cors_g = list()
+for(n in names(list_cors)){
+  for(i in colnames(list_cors[[n]])[grepl("LV", colnames(list_cors[[n]]))]){
+    list_cors_g[[paste0(n, "_", i)]] = list_cors[[n]][,1][abs(list_cors[[n]][,i])>=0.25 & 
+                                                            !is.na(list_cors[[n]][,i])]
+  }
+}
+
+pairwise_int = crossprod(table(stack(lapply(list_cors_g, as.vector))))
+norm_int = reshape2::melt(pairwise_int/diag(pairwise_int))
+colnames(norm_int) = c("cor_1", "cor_2", "perc")
+norm_int$perc = round(norm_int$perc*100, 2)
+norm_int$counts = reshape2::melt(pairwise_int)[,3]
+
+norm_int$cor_1 = factor(gsub("_", " ", as.character(norm_int$cor_1)), levels = rev(c(paste0("Both ", "LV", 0:11),
+                                                                                     paste0("Control ", "LV", 0:5),
+                                                                                     paste0("Tumour ", "LV", 0:5))))
+norm_int$cor_2 = factor(gsub("_", " ", as.character(norm_int$cor_2)), levels = rev(c(paste0("Both ", "LV", 0:11),
+                                                                                     paste0("Control ", "LV", 0:5),
+                                                                                     paste0("Tumour ", "LV", 0:5))))
+
+norm_int = norm_int[norm_int$cor_1 %in% c("Both LV5", "Both LV9",
+                                          "Control LV0", "Control LV1",
+                                          "Tumour LV0", "Tumour LV1") &
+                    norm_int$cor_2 %in% c("Both LV5", "Both LV9",
+                                          "Control LV0", "Control LV1",
+                                          "Tumour LV0", "Tumour LV1"),]
+
+all_g_len = length(unique(unlist(list_cors_g[c(8,12,13,14,19,20)])))
+norm_int$pval_enr = 1
+for(i in 1:nrow(norm_int)){
+  if(norm_int[i,1]!=norm_int[i,2]){
+    c1 = norm_int[i,1]
+    c2 = norm_int[i,2]
+    norm_int$pval_enr[i] = phyper(norm_int[i,4], norm_int[norm_int$cor_1==c2 & norm_int$cor_2==c2,4], 
+           all_g_len - norm_int[norm_int$cor_1==c2 & norm_int$cor_2==c2,4],
+           norm_int[norm_int$cor_1==c1 & norm_int$cor_2==c1,4])
+  }
+}
+
+dotplot_pairs_melanoma = ggplot(norm_int, aes(x = cor_1, y = cor_2))+
+  geom_point(mapping = aes(size = perc, colour = perc))+ 
+  geom_text(mapping = aes(label = perc), nudge_y = 0.33, size = 2.4, fontface = "bold")+
+  scale_colour_viridis_c(option = "inferno", end = 0.9)+
+  scale_size_continuous(range = c(0.8, 5))+
+  scale_x_discrete(position = "top", drop = T)+
+  guides(colour = guide_colourbar(title = "%", barwidth = 0.45, barheight = 4, 
+                                  order = 1), 
+         size = guide_legend(title = "%", order = 2))+
+  labs(x = "LV correlated genes 1", y = "LV correlated genes 2")+
+  theme_classic()+
+  theme(aspect.ratio = 1,
+        axis.text.y = element_text(size = 6, colour = "black"),
+        axis.text.x.top = element_text(size = 6, colour = "black", 
+                                   hjust = 0, vjust = 0, angle = 32),
+        axis.title = element_text(size = 7, colour = "black"),
+        legend.text = element_text(size = 5),
+        legend.title = element_text(size = 5.5),
+        legend.box.spacing = unit(0.05, "cm"),
+        legend.background = element_blank())
+
+save(dotplot_pairs_melanoma, file = "FINAL_PLOTS/plot_repository/dotplot_pairs_melanoma.RData")
+```
+
+
+
+Individual ARD plots
+
+```{r}
+ard_ind_plots = list()
+for(n in names(bgplvm_ard_ind)){
+  bgplvm_ard_ind[[n]]$lv = paste0("LV", 0:(nrow(bgplvm_ard_ind[[n]])-1))
+
+  ard_ind_plots[[n]] = ggplot(bgplvm_ard_ind[[n]], aes(x = lv, y = X0))+
+    geom_bar(stat = "identity", position = "dodge", fill = "black")+
+    labs(x = "Latent Variable", y = "ARD value")+
+    theme_bar+
+    theme(plot.margin = unit(c(0.6,0.27,0.2,0.2),"lines"),
+          axis.title.x = element_text(colour = "black", size = 5))
+}
+
+save(ard_ind_plots, file = "FINAL_PLOTS/plot_repository/ard_ind_plots.RData")
+```
+
+
+
+## Assemble Figures
+Figure 4
+
+```{r, fig.width=6, fig.height=6.5}
+load("FINAL_PLOTS/plot_repository/mel_tsne.RData")
+load("FINAL_PLOTS/plot_repository/mel_tsne.RData")
+load("FINAL_PLOTS/plot_repository/mrd_plt_list.RData")
+load("FINAL_PLOTS/plot_repository/t0_diff.RData")
+load("FINAL_PLOTS/plot_repository/volc_plot_mel.RData")
+
+top = plot_grid(NULL, mel_tsne, rel_widths = c(1,.8), align = "v", 
+                      ncol = 2, labels = c("A", "B"))
+mid_left = plot_grid(volc_plot_mel, t0_diff, align = "v",
+                     nrow = 2, labels = c("C", "E"))
+mid = plot_grid(mid_left, mrd_plt_list$plts, mrd_plt_list$legs, ncol = 3, rel_widths = c(1, 0.7, 0.35), labels = c("", "D"))
+
+fig4 = plot_grid(top, mid, nrow = 2, rel_heights = c(.51, 1))
+
+ggsave(fig4, filename = "FINAL_PLOTS/Figures/Figure04.pdf", paper = "a4", 
+       height = 6.5, width = 6, useDingbats = F)
+```
+
+
+
+Supplementary Figure 7
+
+```{r}
+load("FINAL_PLOTS/plot_repository/SS2_qc_violin_list.RData")
+load("FINAL_PLOTS/plot_repository/mel_tsne_cc.RData")
+load("FINAL_PLOTS/plot_repository/mrd_ard_plot.RData")
+
+fig_top = cowplot::plot_grid(qc_violin_list$mouse_mel, mel_tsne_cc, 
+                             ncol = 2, labels = c("A","B"), rel_widths = c(1, 0.8))
+fig_bot = cowplot::plot_grid(mrd_ard_plot, NULL, ncol = 2,
+                             labels = c("C", "D"), rel_widths = c(0.8, 1))
+
+sup7 = cowplot::plot_grid(fig_top, fig_bot, nrow = 2, rel_heights = c(1, 0.9))
+
+ggsave("FINAL_PLOTS/Figures/SupplementaryFigure07.pdf", sup7,
+       device = "pdf", height = 5.8, width = 7.2, paper = "a4", useDingbats = F)
+```
+
+
+
+Supplementary Figure 8
+
+```{r}
+load("FINAL_PLOTS/plot_repository/bgplvm_ind_plots.RData")
+load("FINAL_PLOTS/plot_repository/ard_ind_plots.RData")
+load("FINAL_PLOTS/plot_repository/dotplot_pairs_melanoma.RData")
+
+leg1 = get_legend(bgplvm_ind_plots$Control)
+leg2 = get_legend(bgplvm_ind_plots$Tumour)
+fig_top = plot_grid(ard_ind_plots$Control, ard_ind_plots$Tumour, 
+                    bgplvm_ind_plots$Control+theme(legend.position = "none"), 
+                    bgplvm_ind_plots$Tumour+theme(legend.position = "none"),
+                    ncol = 2, nrow = 2, align = "hv", labels = c("A", "", "B", "C"))
+fig_mid = plot_grid(leg1, leg2, ncol = 2)
+fig_bot = plot_grid(NULL, dotplot_pairs_melanoma, NULL, ncol = 3, align = "h", labels = c("", "D"), rel_widths = c(0.12, 1, 0.12))
+
+sup8 = plot_grid(fig_top, fig_mid, fig_bot, nrow = 3, rel_heights = c(1.4, 0.2, 1))
+
+ggsave("FINAL_PLOTS/Figures/SupplementaryFigure08.pdf", sup8,
+       device = "pdf", height = 7.5, width = 7, paper = "a4", useDingbats = F)
+```
+
+
+
+
+
+# Figure 5
+Load data
+
+```{r}
+load("saved_data/SS2/sr_list_SS2.RData")
+load("plots/SS2/DE/mouse_de_ct_all.RData")
+load("plots/SS2/DE/human_de_ct_all.RData")
+load("plots/SS2/human/paralog_table.RData")
+load("plots/SS2/DE/human_de_ct_full.RData")
+
+gene_names_human = read.csv("saved_data/gene_names_human_GRCh38_93.csv", 
+                            header = T)
+```
+
+
+
+## Make plots
+Orthologue scatter
+
+```{r, fig.height=2.8, fig.width=3.2}
+mouseHumanPlot = function(mouse_df, human_df, genes, tit = NULL,
+                          thr = 0.25, pval = 0.05, write.tab = NULL){
+  match_g = match(human_df$Gene.stable.ID,
+                  mouse_df$hsapiens_homolog_ensembl_gene)
+  plot_df = data.frame(row.names = human_df$Gene.stable.ID,
+                       "gene_name" = human_df$Gene.name,
+                       "mouse_fc" = mouse_df[match_g,"avg_logFC"],
+                       "mouse_isDE" = abs(mouse_df[match_g,"avg_logFC"])>=thr &
+                         mouse_df[match_g,"p_val_adj"]<=pval,
+                       "human_fc" = human_df[,"avg_logFC"],
+                       "human_isDE" = abs(human_df[,"avg_logFC"])>=thr &
+                         human_df[,"p_val_adj"]<=pval)
+  
+  plot_df$deClass = ifelse(plot_df$mouse_isDE, 
+                           ifelse(plot_df$human_isDE, "Shared", "Mouse"),
+                           ifelse(plot_df$human_isDE, "Human", "None"))
+  plot_df$deClass = factor(plot_df$deClass, 
+                           levels = c("Shared", "Human", "Mouse", "None"))
+  plot_df = plot_df[order(plot_df$deClass, decreasing = T),]
+
+  if(!is.null(write.tab)){
+    write.csv(plot_df, file = write.tab, col.names = T, row.names = T, quote = F)
+  }
+  
+  lab_df = plot_df[plot_df$gene_name %in% genes,]
+
+  ort_plot = ggplot(plot_df, aes(x = mouse_fc, y = human_fc, colour = deClass))+
+    geom_point()+
+    ggrepel::geom_label_repel(data = lab_df, size = 2, colour = "black",
+                             fontface = "bold", min.segment.length = 0, max.iter = 3000,
+                             label.padding = unit(0.05, "cm"),
+                             mapping = aes(x = mouse_fc, y = human_fc,
+                                           label = gene_name))+
+    labs(y = "Human Treg (logFC)", x = "Mouse Treg (logFC)", 
+         title = tit, colour = "DE")+
+    scale_colour_manual(values = cols_m_h)+
+    de_theme+
+    theme(legend.box.margin = margin(0.01,0.01,0.01,0.01),
+          legend.title = element_text(size = 6),
+          legend.title.align = 0.1,
+          plot.margin = unit(c(0.025, 0.02, 0.025, 0.05), "cm"))
+
+  return(ort_plot)
+}
+
+# Colon
+genes_colon = c("FOSL2","RGS1","CREM","LMNA","SAMSN1","SRGN","SELL",
+                "IKZF3","GPR183","CXCR6","MAF","TCF7","EVL")
+ort_colon = mouseHumanPlot(mouse_df = mouse_de_ct_all$mouse_colon_Treg,
+                           human_df = human_de_ct_all$colon_Treg, 
+                           genes = genes_colon, tit = "Colon",
+                           thr = 0.25, pval = 0.05)
+
+# Skin
+genes_skin = c("FOSL2","RGS1","CREM","LMNA","SAMSN1","SRGN","SELL",
+               "LGALS3","REL","CTLA4","ICOS","TIGIT","TNFRSF18","CD44",
+               "RORA","LEF1","S1PR1","LTB")
+ort_skin = mouseHumanPlot(mouse_df = mouse_de_ct_all$mouse_skin_Treg,
+                          human_df = human_de_ct_all$skin_Treg,
+                          genes = genes_skin, tit = "Skin",
+                          thr = 0.25, pval = 0.05)
+
+ort_list = list("colon" = ort_colon, "skin" = ort_skin)
+save(ort_list, file = "FINAL_PLOTS/plot_repository/ort_list.RData")
+```
+
+
+
+Ortolog venn diagrammes
+
+```{r, fig.height=1.5, fig.width=2.5}
+makeVenn = function(mouse_df, human_df, 
+                    thr = 0.25, pval = 0.05){
+  genes_list = list("Mouse" = mouse_df$hsapiens_homolog_ensembl_gene[mouse_df$p_val_adj<=pval & mouse_df$avg_logFC>=thr],
+                    "Human" = human_df$Gene.stable.ID[human_df$p_val_adj<=pval &
+                                                        human_df$avg_logFC>=thr])
+  
+  venn_all = grid::gTree(children = VennDiagram::venn.diagram(genes_list, 
+                 print.mode = c('percent', 'raw'), sub.fontfamily = "Helvetica", 
+                 sigdigs = 3, hyper.test = T,
+                 total.population = length(human_de_ct_all$colon_Treg$Gene.stable.ID),
+                 lower.tail = F, filename = NULL, fontfamily = "Helvetica",
+                 main.fontfamily = "Helvetica", cat.fontfamily = "Helvetica", 
+                 cat.cex = 0.8, cex = 0.6, sub.cex = 0.5, verbose = F))
+  
+  return(venn_all)
+}
+
+list_venns_mh = list(
+colon_venn = makeVenn(mouse_de_ct_all$mouse_colon_Treg, human_de_ct_all$colon_Treg),
+skin_venn = makeVenn(mouse_de_ct_all$mouse_skin_Treg, human_de_ct_all$skin_Treg))
+
+save(list_venns_mh, file = "FINAL_PLOTS/plot_repository/list_venns_mh.RData")
+```
+
+
+
+Paralog heatmaps
+
+```{r, fig.width=3, fig.height=3.75}
+gene_is_de[,12:17] = t(apply(gene_is_de[,12:17], 1, scale))
+plot_df = reshape2::melt(gene_is_de[gene_is_de$group_h %in% c(11,15,14,34,32,38,21,25,28), c(2,10, 12:17)],id.vars=c(1,2))
+plot_df$Gene.name = factor(plot_df$Gene.name, 
+                           levels = unique(plot_df$Gene.name)[order(unique(plot_df$Gene.name), decreasing = T)])
+
+plot_df$species = unlist(lapply(strsplit(as.character(plot_df$variable), "_"), function(x) x[[1]]))
+plot_df$tissue = unlist(lapply(strsplit(as.character(plot_df$variable), "_"), function(x) x[[2]]))
+plot_df$tissue = factor(plot_df$tissue, levels = c("colon", "skin", "blood", "spleen"))
+
+par_heat_mh = ggplot(plot_df, aes(x = tissue, y = Gene.name, fill = value))+
+  facet_grid(group_h~species, scales = "free")+
+  geom_tile()+
+  scale_x_discrete(position = "top", expand = c(0,0))+
+  scale_fill_viridis_c(option = "inferno", begin = 0.05)+
+  guides(fill = guide_colourbar(title = "z-score mean\nlog counts", barwidth = 0.5))+
+  theme_classic()+
+  theme(plot.margin = unit(c(0.025, 0.085, 0.025, 0.07), "cm"),
+        strip.background.y = element_blank(),
+        strip.text.y = element_blank(),
+        strip.text.x = element_text(size = 6.5),
+        strip.placement = "outside",
+        strip.background.x = element_rect(size = 0.3),
+        axis.title = element_blank(),
+        axis.line = element_blank(),
+        axis.text.y = element_text(colour = "black", size = 6.5),
+        axis.text.x.top = element_text(angle = 90, colour = "black", 
+                                       hjust = 0, vjust = 0.3, size = 6.5),
+        legend.title = element_text(size = 6),
+        legend.text = element_text(size = 5.5),
+        legend.box.spacing = unit(0.03, "cm"))
+
+save(par_heat_mh, file = "FINAL_PLOTS/plot_repository/par_heat_mh.RData")
+```
+
+
+
+tSNEs for human
+
+```{r, fig.height=3.5, fig.width=3.2}
+makeTSNEHuman = function(human_df, col, shap, col_pal,
+                         col_tit, shap_tit){
+  plot_df = cbind(human_df@dr$tsne@cell.embeddings, human_df@meta.data)
+  plot_df$tissue_cell = factor(gsub(".", " ", 
+                                    as.character(plot_df$tissue_cell), fixed = T),
+                               levels = gsub(".", " ", levels(plot_df$tissue_cell), 
+                                             fixed = T))
+  ord = ifelse(col==shap, 1, 2)
+  tsne_plot = ggplot(plot_df)+
+    geom_point(mapping = aes_string(x = "tSNE_1", y = "tSNE_2", 
+                                    colour = col, shape = shap), 
+               size = 0.7)+
+    scale_colour_manual(values = col_pal)+
+    scale_shape_manual(values = c(10, 1, 19, 12, 0, 15, 11, 2, 17))+
+    guides(colour = guide_legend(title = col_tit, title.position = "top",
+                                 override.aes = list(size = 1.65), order = ord, nrow = 3),
+           shape = guide_legend(title = shap_tit, title.position = "top",
+                                 override.aes = list(size = 1.65), order = 1, nrow = 3))+
+    tsne_theme+
+    theme(legend.spacing = unit(0.01, "cm"),
+          legend.position = "bottom",
+          legend.key.size = unit(0.3, "cm"))
+  
+  return(tsne_plot)
+}
+
+tsne_human_list = list("tissue_cell" = makeTSNEHuman(sr_list$human, col = "tissue_cell",
+                                                     shap = "tissue_cell", 
+                                                     col_pal = colours_h_tc, 
+                                                     col_tit = "Tissue/Cell Type",
+                                                     shap_tit = "Tissue/Cell Type"),
+                       "individual" = makeTSNEHuman(sr_list$human, col = "individual",
+                                                     shap = "tissue_cell", 
+                                                     col_pal = colours_h_ind, 
+                                                     col_tit = "Individual",
+                                                     shap_tit = "Tissue/Cell Type"))
+
+save(tsne_human_list, file = "FINAL_PLOTS/plot_repository/tsne_human_list.RData")
+```
+
+
+
+Heatmap 3 cell types
+
+```{r, fig.height=4, fig.width=3.9}
+genes_use = c("CREM","BATF","TIGIT","IKZF2","SAMSN1","MAF","NAMPT","RGS1",
+              "CCR6","TNFRSF1B","IL1R1","IKZF3","LAG3","ICOS","IL1R2","IQGAP2",
+              "RUNX3", "IL7R","TNFRSF4","CTLA4","PIM2","CD44","TNFRSF18",
+              
+              "CD69","LEF1","SELL","TCF7","ITGB2","ITGB7","S1PR1","KLF2","KDM3B",
+              
+               "NR3C1","SKIL","CXCR4", "PTMA","KLRB1",
+              
+              "TRAF3IP3","ITGB1","VIM")
+genes_ens = gene_names_human[match(genes_use, gene_names_human$Gene.name), 1]
+genes_mean_exp = t(apply(sr_list$human@data[genes_ens,], 1, 
+                         function(x) tapply(x, sr_list$human@meta.data$tissue_cell,
+                                            mean)))
+cn = colnames(genes_mean_exp)
+genes_mean_exp = t(apply(genes_mean_exp, 1, scale))
+colnames(genes_mean_exp) = cn
+
+hc = hclust(dist(genes_mean_exp), method = "ward.D2")
+
+plot_df = reshape2::melt(genes_mean_exp)
+colnames(plot_df) = c("gene", "tissue_cell", "value")
+plot_df$tissue_cell = gsub(".", " ", as.character(plot_df$tissue_cell), fixed = T)
+plot_df$tissue_cell = factor(plot_df$tissue_cell, 
+                             levels = unique(plot_df$tissue_cell))
+plot_df$tissue = unlist(lapply(strsplit(as.character(plot_df$tissue_cell), " "),
+                               function(x) x[1]))
+plot_df$tissue = factor(plot_df$tissue, levels = c("skin", "colon", "blood"))
+plot_df$ct = unlist(lapply(strsplit(as.character(plot_df$tissue_cell), " "),
+                               function(x) x[2]))
+plot_df$ct = factor(plot_df$ct, levels = c("Treg", "Tem", "Tcm"))
+plot_df$gene_name = gene_names_human[match(plot_df$gene, 
+                                           gene_names_human$Gene.stable.ID), 2]
+plot_df$gene_name = factor(plot_df$gene_name, levels = genes_use[hc$order])
+
+heatmap_3ct = ggplot(data = plot_df, aes(x = tissue, y = gene_name, fill = value))+
+  facet_grid(~ct, scales = "free", space = "free_x")+
+  geom_tile(colour = "grey45", size = 0.02)+
+  scale_x_discrete(expand = c(0,0), position = "top")+
+  scale_colour_manual(values = colours_h_tc)+
+  scale_fill_viridis_c(option = "inferno", begin = .1)+
+  guides(fill = guide_colourbar(title = "Mean\nScaled\nlog(exp)", barheight = 0.5))+
+  theme_classic()+
+  theme(strip.placement = "outside",
+        strip.switch.pad.grid = unit(0.2, "cm"),
+        strip.background = element_rect(size = 0.5, linetype = "solid"),
+        panel.background = element_blank(),
+        axis.title = element_blank(),
+        axis.line = element_blank(),
+        axis.text.x = element_text(colour = colours_h_tc[c(9,5,2)], 
+                                   face = "bold", size = 6.77, angle = 90, vjust = 0.5),
+        axis.text.y = element_text(colour = "black", size = 6.5),
+        strip.text = element_text(size = 7, face = "bold"),
+        legend.title = element_text(size = 5.5, hjust = 0),
+        legend.text = element_text(size = 5, hjust = 0),
+        legend.box.margin = margin(0,0,0,0),
+        legend.box.spacing = unit(0.05, "lines"),
+        legend.title.align = 0,
+        legend.position = "bottom",
+        plot.background = element_blank())
+
+save(heatmap_3ct, file = "FINAL_PLOTS/plot_repository/heatmap_3ct.RData")
+```
+
+
+
+## Assemble Figures
+Figure 5
+
+```{r}
+load("FINAL_PLOTS/plot_repository/ort_list.RData")
+load("FINAL_PLOTS/plot_repository/list_venns_mh.RData")
+load("FINAL_PLOTS/plot_repository/par_heat_mh.RData")
+
+fig_left = cowplot::plot_grid(NULL, par_heat_mh, nrow = 2, rel_heights = c(0.6, 1),
+                              labels = c("A", "D"))
+venn_colon = cowplot::plot_grid(NULL, list_venns_mh$colon_venn, NULL,
+                                ncol = 3, rel_widths = c(0.66, 1, 0.66))
+venn_skin = cowplot::plot_grid(NULL, list_venns_mh$skin_venn, NULL,
+                                ncol = 3, rel_widths = c(0.66, 1, 0.66))
+fig_right = cowplot::plot_grid(ort_list$colon, venn_colon, 
+                               ort_list$skin, venn_skin,
+                               nrow = 4, rel_heights = c(1, .6, 1, .6),
+                               labels = c("B", "", "C"), align = "v")
+
+fig5 = cowplot::plot_grid(fig_left, fig_right, ncol = 2, rel_widths = c(0.66, 1))
+
+ggsave(fig5, filename = "FINAL_PLOTS/Figures/Figure05.pdf", paper = "a4", 
+       height = 7.2, width = 7.6, useDingbats = F)
+```
+
+
+
+Supplementary Figure 9
+
+```{r, fig.width=7.7, fig.height=6}
+load("FINAL_PLOTS/plot_repository/SS2_qc_violin_list.RData")
+load("FINAL_PLOTS/plot_repository/tsne_human_list.RData")
+load("FINAL_PLOTS/plot_repository/heatmap_3ct.RData")
+
+fig_left_bot = cowplot::plot_grid(tsne_human_list$tissue_cell, tsne_human_list$individual, 
+                                  ncol = 2, labels = c("B", "C"), align = "h")
+fig_left = cowplot::plot_grid(qc_violin_list$human, fig_left_bot, 
+                              nrow = 2, labels = c("A"))
+fig_heat = cowplot::plot_grid(NULL, heatmap_3ct, NULL, nrow = 3, rel_heights = c(0.15, 1, 0.06), labels = c("", "D"))
+sup9 = cowplot::plot_grid(fig_left, fig_heat, ncol = 2, rel_widths = c(1, 0.5))
+
+ggsave(sup9, filename = "FINAL_PLOTS/Figures/SupplementaryFigure09.pdf", paper = "a4", 
+       height = 6, width = 7.7, useDingbats = F)
+```
+
+
+
+# Extra QC Plotting
+## PCA testing
+Load data
+
+```{r}
+load("./saved_data/SS2/SS2_postQC_data.RData")
+```
+
+
+
+Run PCAs
+
+```{r}
+# Counts data
+counts_seurat = Seurat::CreateSeuratObject(filtered_datasets$mouse_colon$counts)
+counts_seurat = AddMetaData(counts_seurat, 
+                            metadata = infoTable_list_filtered$mouse_colon)
+counts_seurat = SetIdent(counts_seurat, 
+                         ident.use = counts_seurat@meta.data$tissue_cell)
+counts_seurat <- NormalizeData(counts_seurat, normalization.method = "LogNormalize", 
+                               scale.factor = 10000, display.progress = F)
+
+# TPM data
+tpm_seurat = Seurat::CreateSeuratObject(log1p(filtered_datasets$mouse_colon$tpm))
+tpm_seurat = AddMetaData(tpm_seurat, 
+                         metadata = infoTable_list_filtered$mouse_colon)
+tpm_seurat = SetIdent(tpm_seurat, 
+                      ident.use = tpm_seurat@meta.data$tissue_cell)
+
+# PCA output
+pca_out_res = list()
+for(sc in c(T, F)){
+  n = if(sc) "scale" else "noscale"
+  counts_seurat_sc <- ScaleData(counts_seurat, model.use = "negbinom", 
+                                do.center = T, do.scale = sc, use.umi = T)
+  tpm_seurat_sc <- ScaleData(tpm_seurat, model.use = "negbinom", 
+                             do.center = T, do.scale = sc, use.umi = T)
+  
+  counts_seurat_sc = RunPCA(counts_seurat_sc, 
+                            pc.genes = rownames(counts_seurat_sc@data), 
+                            pcs.compute = 50, do.print = FALSE)
+  tpm_seurat_sc = RunPCA(tpm_seurat_sc, 
+                         pc.genes = rownames(tpm_seurat_sc@data), 
+                         pcs.compute = 50, do.print = FALSE)
+  
+  pca_out_res[[paste0("count_", n)]] = merge(counts_seurat_sc@meta.data[,c("tissue_cell", "nGene", "nUMI", "p_mt")], counts_seurat_sc@dr$pca@cell.embeddings[,1:6], by = 0)
+  pca_out_res[[paste0("tpm_", n)]] = merge(tpm_seurat_sc@meta.data[,c("tissue_cell", "nGene", "nUMI", "p_mt")], tpm_seurat_sc@dr$pca@cell.embeddings[,1:6], by = 0)
+}
+```
+
+
+
+Plot PCAs
+
+```{r, fig.height=5.45, fig.width=8}
+plot_list = list()
+for(n in names(pca_out_res)){
+  plot_list[[paste0(n, "_1")]] = ggplot(pca_out_res[[n]], 
+                                        aes(x = PC1, y = PC2, colour = tissue_cell))+
+    geom_point(size = 0.5)+
+    scale_colour_manual(values = colours_mouse)+
+    ggtitle(n)+
+    tsne_theme+
+    theme(plot.title = element_text(size = 8.2),
+          axis.ticks = element_line(colour = "black"),
+          axis.text = element_text(colour = "black", size = 6))
+  
+  leg = get_legend(plot_list[[paste0(n, "_1")]])
+  plot_list[[paste0(n, "_1")]] = plot_list[[paste0(n, "_1")]]+
+    theme(legend.position = "none")
+  
+  plot_list[[paste0(n, "_2")]] = ggplot(pca_out_res[[n]], 
+                                        aes(x = PC3, y = PC4, colour = tissue_cell))+
+    geom_point(size = 0.5)+
+    scale_colour_manual(values = colours_mouse)+
+    ggtitle(n)+
+    tsne_theme+
+    theme(plot.title = element_text(size = 8.2),
+          axis.ticks = element_line(colour = "black"),
+          axis.text = element_text(colour = "black", size = 6),
+          legend.position = "none")
+  
+  plot_list[[paste0(n, "_3")]] = ggplot(pca_out_res[[n]], 
+                                        aes(x = PC5, y = PC6, colour = tissue_cell))+
+    geom_point(size = 0.5)+
+    scale_colour_manual(values = colours_mouse)+
+    ggtitle(n)+
+    tsne_theme+
+    theme(plot.title = element_text(size = 8.2),
+          axis.ticks = element_line(colour = "black"),
+          axis.text = element_text(colour = "black", size = 6),
+          legend.position = "none")
+}
+
+cowplot::plot_grid(ggplot()+draw_label("PC1\nvs\nPC2"),
+                   plot_list$count_scale_1, plot_list$count_noscale_1,
+                   plot_list$tpm_scale_1, plot_list$tpm_noscale_1, NULL,
+                   ggplot()+draw_label("PC3\nvs\nPC4"),
+                   plot_list$count_scale_2, plot_list$count_noscale_2,
+                   plot_list$tpm_scale_2, plot_list$tpm_noscale_2, leg,
+                   ggplot()+draw_label("PC5\nvs\nPC6"),
+                   plot_list$count_scale_3, plot_list$count_noscale_3,
+                   plot_list$tpm_scale_3, plot_list$tpm_noscale_3, NULL,
+                   nrow = 3, ncol = 6, rel_widths = c(0.4, 1, 1, 1, 1, 0.4), align = "hv")
+```
+
+
+
+QC plots
+
+```{r, fig.height=5.45, fig.width=8}
+plot_list = list()
+for(n in names(pca_out_res)){
+  plot_list[[paste0(n, "_1")]] = ggplot(pca_out_res[[n]], 
+                                        aes(x = PC3, y = PC4, colour = log2(nGene)))+
+    geom_point(size = 0.5)+
+    ggtitle(n)+
+    tsne_theme+
+    theme(plot.title = element_text(size = 8.2),
+          axis.ticks = element_line(colour = "black"),
+          axis.text = element_text(colour = "black", size = 6))
+  
+  leg1 = get_legend(plot_list[[paste0(n, "_1")]])
+  plot_list[[paste0(n, "_1")]] = plot_list[[paste0(n, "_1")]]+
+    theme(legend.position = "none")
+  
+  plot_list[[paste0(n, "_2")]] = ggplot(pca_out_res[[n]], 
+                                        aes(x = PC3, y = PC4, colour = log10(nUMI)))+
+    geom_point(size = 0.5)+
+    ggtitle(n)+
+    tsne_theme+
+    theme(plot.title = element_text(size = 8.2),
+          axis.ticks = element_line(colour = "black"),
+          axis.text = element_text(colour = "black", size = 6))
+  
+  leg2 = get_legend(plot_list[[paste0(n, "_2")]])
+  plot_list[[paste0(n, "_2")]] = plot_list[[paste0(n, "_2")]]+
+    theme(legend.position = "none")
+  
+  plot_list[[paste0(n, "_3")]] = ggplot(pca_out_res[[n]], 
+                                        aes(x = PC3, y = PC4, colour = p_mt))+
+    geom_point(size = 0.5)+
+    ggtitle(n)+
+    tsne_theme+
+    theme(plot.title = element_text(size = 8.2),
+          axis.ticks = element_line(colour = "black"),
+          axis.text = element_text(colour = "black", size = 6))
+  
+  leg3 = get_legend(plot_list[[paste0(n, "_3")]])
+  plot_list[[paste0(n, "_3")]] = plot_list[[paste0(n, "_3")]]+
+    theme(legend.position = "none")
+}
+
+cowplot::plot_grid(ggplot()+draw_label("PC3\nvs\nPC4"),
+                   plot_list$count_scale_1, plot_list$count_noscale_1,
+                   plot_list$tpm_scale_1, plot_list$tpm_noscale_1, leg1,
+                   ggplot()+draw_label("PC3\nvs\nPC4"),
+                   plot_list$count_scale_2, plot_list$count_noscale_2,
+                   plot_list$tpm_scale_2, plot_list$tpm_noscale_2, leg2,
+                   ggplot()+draw_label("PC3\nvs\nPC4"),
+                   plot_list$count_scale_3, plot_list$count_noscale_3,
+                   plot_list$tpm_scale_3, plot_list$tpm_noscale_3, leg3,
+                   nrow = 3, ncol = 6, rel_widths = c(0.4, 1, 1, 1, 1, 0.4), align = "hv")
+```
+
+
+
+## TCR QC analysis
+Load data
+
+```{r}
+load("plots/SS2/QC/QC_TCR.RData")
+```
+
+
+
+Volcano plots
+
+```{r}
+volc_list = list()
+for(n in names(sub_markers_list)){
+  volc_list[[n]] = ggplot()+
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed")+
+  geom_vline(xintercept = c(-.25, .25), linetype = "dashed")+
+  geom_point(data = sub_markers_list[[n]], 
+             mapping = aes(x = avg_logFC, y = -log10(p_val_adj)), size = 0.8)+
+  coord_cartesian(xlim = c(-2.5,2.5), ylim = c(0, 3))+
+  labs(x = "average logFC", y = "-log10(adjusted p-value)", 
+       title = paste("Volcano plot\nTreg", n))+
+  theme_classic()+
+  de_theme+
+  theme(panel.grid = element_blank(),
+        plot.title = element_text(size = 9, face = "bold"),
+        legend.box.background = element_rect(colour = "black"),
+        legend.key.size = unit(0.2, "cm"),
+        legend.position = c(0.14,.87),
+        legend.margin = margin(0.2,1,0.2,0),
+        legend.key = element_blank())
+}
+```
+
+
+
+Violin plots
+
+```{r, fig.height=6, fig.width=4}
+box_list = list()
+for(n in names(subset_list)){
+  box_list[[paste0(n, "_log10UMI")]] = ggplot(subset_list[[n]]@meta.data, 
+                                              aes(x = tcr_out, y = log10(nUMI)))+
+    geom_boxplot()+
+    labs(title = paste0(n, " log10Reads"), x = "TCR QC excluded")+
+    theme_bar+
+    theme(axis.title.x = element_text(size = 7),
+          plot.title = element_text(size = 9, face = "bold"))
+  
+  box_list[[paste0(n, "_log2Genes")]] = ggplot(subset_list[[n]]@meta.data, 
+                                              aes(x = tcr_out, y = log2(nGene)))+
+    geom_boxplot()+
+    labs(title = paste0(n, " log2Genes"), x = "TCR QC excluded")+
+    theme_bar+
+    theme(axis.title.x = element_text(size = 7),
+          plot.title = element_text(size = 9, face = "bold"))
+}
+
+cowplot::plot_grid(volc_list$colon, volc_list$skin,
+                   box_list$colon_log10UMI, box_list$skin_log10UMI,
+                   box_list$colon_log2Gene, box_list$skin_log2Gene,
+                   nrow = 3, ncol = 2, align = "hv")
+```
+
+
+
+
+
+

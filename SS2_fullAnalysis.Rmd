@@ -1,0 +1,1267 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+
+
+# Setup
+Load libraries
+
+```{r}
+library(Seurat)
+library(switchde)
+library(patchwork)
+
+source("/nfs/team205/tpcg/bin/scripts/usefulFunctions.R")
+
+gene_names = read.table("../../../10x-runs/ricardo/3324STDY7421492/outs/filtered_gene_bc_matrices/mm10/genes.tsv")
+gene_names_human = read.csv("saved_data/gene_names_human_GRCh38_93.csv", 
+                            header = T)
+
+colours_mouse = RColorBrewer::brewer.pal(12, "Paired")[c(5,6, 1,2, 9,10)]
+colours_mel = rev(RColorBrewer::brewer.pal(11, "RdYlBu")[c(1,11)])
+colours_h_ind = c(RColorBrewer::brewer.pal(11, "RdYlBu")[c(9,10)], RColorBrewer::brewer.pal(11, "RdYlGn")[2:4])
+colours_h_tc = c(RColorBrewer::brewer.pal(11, "PuOr")[8:10], RColorBrewer::brewer.pal(9, "Greens")[4], RColorBrewer::brewer.pal(9, "BuGn")[6], RColorBrewer::brewer.pal(9, "Greens")[9], RColorBrewer::brewer.pal(9, "YlOrRd")[c(3,4)], RColorBrewer::brewer.pal(12, "Paired")[6])
+```
+
+
+
+# QC and Seurat formatting
+Load pre-QC data
+
+```{r}
+load("./saved_data/SS2/preQC_data.RData")
+```
+
+
+
+Filter cells with technical problems and non-single-cells (not QC)
+
+```{r}
+infoTable_list_filtered = list()
+filtered_datasets = list()
+for(n in names(infoTable_list_unfiltered)){
+  if("technical_problems" %in% colnames(infoTable_list_unfiltered[[n]])){
+    good_cells = infoTable_list_unfiltered[[n]]$technical_problems=="no" & infoTable_list_unfiltered[[n]]$nr.of.cells==1
+  } else{
+    good_cells = infoTable_list_unfiltered[[n]]$nr.of.cells==1
+  }
+  
+  infoTable_list_filtered[[n]] = infoTable_list_unfiltered[[n]][good_cells,]
+  filtered_datasets[[n]] = list("counts" = raw_datasets_unfiltered[[n]]$counts[,good_cells],
+                                "tpm" = raw_datasets_unfiltered[[n]]$tpm[,good_cells])
+}
+```
+
+
+
+Add GD cell info
+
+```{r}
+for(n in names(infoTable_list_filtered)){
+    notGD = ((infoTable_list_filtered[[n]]$tracer_A_1!="No" & 
+        (infoTable_list_filtered[[n]]$tracer_pG_1=="No" & infoTable_list_filtered[[n]]$tracer_pG_2=="No") | 
+            (infoTable_list_filtered[[n]]$tracer_pD_1=="No" & infoTable_list_filtered[[n]]$tracer_pD_2=="No")) |
+        (infoTable_list_filtered[[n]]$tracer_B_1!="No" & 
+        (infoTable_list_filtered[[n]]$tracer_pG_1=="No" & infoTable_list_filtered[[n]]$tracer_pG_2=="No") | 
+            (infoTable_list_filtered[[n]]$tracer_pD_1=="No" & infoTable_list_filtered[[n]]$tracer_pD_2=="No")))
+
+    infoTable_list_filtered[[n]]$clonotypes = ifelse(notGD, as.character(infoTable_list_filtered[[n]]$tracer_clonotype_simp), "gdTcell")
+    #print(table(infoTable_list_filtered[[n]]$clonotypes))
+}
+```
+
+
+
+Look at all datasets' QC values distribution by tissue/cell - violin plots
+
+```{r, fig.height=3, fig.width=3.8}
+qc_vals = c("total_reads", "p_ercc", "p_mt", "n_genes", "p_unmapped")
+qc_thr = c(log10(250000), 25, 10, log10(1750), 30)
+names(qc_thr) = qc_vals
+qc_violin_list = list()
+pdf("./plots/SS2/QC/QC_violin.pdf", paper = "a4", useDingbats = F)
+for(n in names(infoTable_list_filtered)){
+  plot_list = list()
+  plot_df = infoTable_list_filtered[[n]][,c(qc_vals, "tissue_cell")]
+  if(n=="human"){
+    qc_thr = c(log10(100000), 50, 20, log10(1000), 60)
+    names(qc_thr) = qc_vals
+    cols_pal = colours_h_tc
+  } else{
+    cols_pal = colours_mouse
+    
+    plot_df$tissue_cell = gsub(".", " ", plot_df$tissue_cell, fixed = T)
+    plot_df$tissue_cell = factor(plot_df$tissue_cell, levels = c("colon Tmem", 
+                                                               "colon Treg",
+                                                               "skin Tmem", 
+                                                               "skin Treg",
+                                                               "LN Tmem", 
+                                                               "LN Treg",
+                                                               "spleen Tmem", 
+                                                               "spleen Treg"))
+  }
+  
+  for(qc in qc_vals){
+    axistit = c("# Reads", "% ERCC", "% Mt", "# Genes", "% Unmapped")[which(qc_vals==qc)]
+    if(!grepl("p_", qc)) plot_df[,qc] = log10(plot_df[,qc]+1)
+    plot_list[[qc]] = ggplot(plot_df, aes_string(x = "tissue_cell", y = qc, fill = "tissue_cell"))+
+      geom_violin(draw_quantiles = c(0.25, 0.5, 0.75), size = 0.2)+
+      labs(x = "Tissue/Cell Type", y = axistit)+
+      geom_hline(yintercept = qc_thr[qc],
+                 linetype = "dashed")+
+      scale_fill_manual(values = cols_pal)+
+      theme_classic()+
+      theme(aspect.ratio = 1,
+            text = element_text(colour = "black"),
+            legend.position = "none",
+            axis.text.x = element_text(size = 4.7, colour = "black", 
+                                       angle = 33, hjust = 1, vjust = 1),
+            axis.text.y = element_text(size = 4.7, colour = "black"),
+            axis.title = element_text(colour = "black", size = 5.5))
+    print(plot_list[[qc]])
+  }
+  plots = plot_list$total_reads + plot_list$p_ercc + plot_list$p_mt + plot_list$n_genes + plot_list$p_unmapped + 
+    plot_layout(nrow = 2, ncol = 3)
+  qc_violin_list[[n]] = patchworkGrob(plots)
+}
+dev.off()
+save(qc_violin_list, file = "./FINAL_PLOTS/plot_repository/SS2_qc_violin_list.RData")
+```
+
+
+
+Filter based on QC
+
+```{r}
+qc_thr = c(250000, 25, 10, 1750, 30)
+names(qc_thr) = c("total_reads", "p_ercc", "p_mt", "n_genes", "p_unmapped")
+meta_rejected = list()
+exp_rejected = list()
+for(n in names(infoTable_list_filtered)){
+  if(n=="human") qc_thr[1:5] = c(100000, 50, 20, 1000, 60)
+  cells = rownames(infoTable_list_filtered[[n]])[infoTable_list_filtered[[n]]$total_reads>=qc_thr["total_reads"] &
+                                                   infoTable_list_filtered[[n]]$p_ercc<=qc_thr["p_ercc"] &
+                                                   infoTable_list_filtered[[n]]$p_mt<=qc_thr["p_mt"] &
+                                                   infoTable_list_filtered[[n]]$n_genes>=qc_thr["n_genes"] &
+                                                   infoTable_list_filtered[[n]]$p_unmapped<=qc_thr["p_unmapped"]]
+  
+  meta_rejected[[n]] = infoTable_list_filtered[[n]]
+  meta_rejected[[n]]$qc_out = ifelse(rownames(meta_rejected[[n]]) %in% cells, "No", "Yes")
+  infoTable_list_filtered[[n]] = infoTable_list_filtered[[n]][cells,]
+  
+  filtered_datasets[[n]]$counts = filtered_datasets[[n]]$counts[,cells]
+  exp_genes = rownames(filtered_datasets[[n]]$counts)[apply(filtered_datasets[[n]]$counts, 1, function(x) length(x[x>1])>=3)]
+  
+  exp_rejected[[n]] = filtered_datasets[[n]]$counts[exp_genes,]
+  
+  filtered_datasets[[n]]$counts = filtered_datasets[[n]]$counts[exp_genes,]
+  filtered_datasets[[n]]$tpm = filtered_datasets[[n]]$tpm[,cells]
+  filtered_datasets[[n]]$tpm = filtered_datasets[[n]]$tpm[exp_genes,]
+}
+lapply(meta_rejected, function(x) table(x$qc_out)/nrow(x)) # QC removal fractions
+```
+
+
+
+Filter non ab T cells. Then, clean clonotypes (if only one, cell goes into notAssigned)
+
+```{r}
+for(n in names(infoTable_list_filtered)){
+    good_cells = !(infoTable_list_filtered[[n]]$clonotypes %in% c("gdTcell", "iNKT", "MAIT", "NoTCR", "Multi_recomb") |
+                     is.na(infoTable_list_filtered[[n]]$clonotypes))
+    
+    meta_rejected[[n]]$tcr_out = ifelse(rownames(meta_rejected[[n]]) %in% rownames(infoTable_list_filtered[[n]])[good_cells], "No", "Yes")
+    
+    infoTable_list_filtered[[n]] = infoTable_list_filtered[[n]][good_cells,]
+    
+    filtered_datasets[[n]]$counts = filtered_datasets[[n]]$counts[,good_cells]
+    exp_genes = rownames(filtered_datasets[[n]]$counts)[apply(filtered_datasets[[n]]$counts, 1, function(x) length(x[x>1])>=3)]
+    
+    exp_rejected[[n]] = exp_rejected[[n]][exp_genes,]
+    
+    filtered_datasets[[n]]$counts = filtered_datasets[[n]]$counts[exp_genes,]
+    filtered_datasets[[n]]$tpm = filtered_datasets[[n]]$tpm[,good_cells]
+    filtered_datasets[[n]]$tpm = filtered_datasets[[n]]$tpm[exp_genes,]
+}
+
+for(dataset in names(infoTable_list_filtered)){
+    unique_cl = names(table(infoTable_list_filtered[[dataset]]$clonotypes)[table(infoTable_list_filtered[[dataset]]$clonotypes)==1])
+    
+    infoTable_list_filtered[[dataset]]$clonotypes = ifelse(infoTable_list_filtered[[dataset]]$clonotypes %in% unique_cl,
+                                                           "notAssigned",infoTable_list_filtered[[dataset]]$clonotypes)
+}
+lapply(meta_rejected, function(x) table(x[x$qc_out=="No",]$tcr_out)/sum(x$qc_out=="No"))
+```
+
+
+
+Save all
+
+```{r}
+save(infoTable_list_filtered, filtered_datasets, 
+     bm.query_human, bm.query_human_o, bm.query_mouse, bm.query_mouse_o,
+     file = "./saved_data/SS2/SS2_postQC_data.RData")
+# save all cells with removal labels
+save(exp_rejected, meta_rejected, file = "./saved_data/SS2/SS2_QCinfo_data.RData")
+```
+
+
+
+Save Seurat objects for count matrices
+
+```{r}
+sr_list = list(
+  mouse_colon = Seurat::CreateSeuratObject(filtered_datasets$mouse_colon$counts),
+  mouse_skin = Seurat::CreateSeuratObject(filtered_datasets$mouse_skin$counts),
+  mouse_mel = Seurat::CreateSeuratObject(filtered_datasets$mouse_mel$counts),
+  human = Seurat::CreateSeuratObject(filtered_datasets$human$counts)
+)
+n = names(sr_list)
+sr_list = lapply(names(sr_list), 
+                 function(x) AddMetaData(sr_list[[x]], 
+                                         metadata = infoTable_list_filtered[[x]]))
+names(sr_list) = n
+
+sr_list_noqc = list(
+  mouse_colon = Seurat::CreateSeuratObject(exp_rejected$mouse_colon),
+  mouse_skin = Seurat::CreateSeuratObject(exp_rejected$mouse_skin),
+  mouse_mel = Seurat::CreateSeuratObject(exp_rejected$mouse_mel),
+  human = Seurat::CreateSeuratObject(exp_rejected$human)
+)
+n = names(sr_list_noqc)
+sr_list_noqc = lapply(names(sr_list_noqc), 
+                      function(x) AddMetaData(sr_list_noqc[[x]], 
+                                              metadata = meta_rejected[[x]]))
+names(sr_list_noqc) = n
+```
+
+
+
+Prepare normalisations
+
+```{r}
+sr_list <- lapply(sr_list, NormalizeData, normalization.method = "LogNormalize", 
+                  scale.factor = 10000, display.progress = F)
+sr_list <- lapply(sr_list, ScaleData, model.use = "negbinom", 
+                  do.center = T, do.scale = F, use.umi = T)
+sr_list = lapply(names(sr_list), function(x) {
+  RunPCA(sr_list[[x]], pc.genes = rownames(sr_list[[x]]@data), 
+         pcs.compute = 50, do.print = FALSE)})
+names(sr_list) = n
+
+sr_list_noqc <- lapply(sr_list_noqc, NormalizeData, 
+                       normalization.method = "LogNormalize", 
+                       scale.factor = 10000, display.progress = F)
+sr_list_noqc <- lapply(sr_list_noqc, ScaleData, model.use = "negbinom", 
+                       do.center = T, do.scale = F, use.umi = T)
+sr_list_noqc = lapply(names(sr_list_noqc), function(x) {
+  RunPCA(sr_list_noqc[[x]], pc.genes = rownames(sr_list_noqc[[x]]@data), 
+         pcs.compute = 50, do.print = FALSE)})
+names(sr_list_noqc) = n
+```
+
+
+
+Elbow plot and tSNE
+
+```{r}
+for(n in names(sr_list)){
+  plot_df = cbind(sr_list[[n]]@meta.data, sr_list[[n]]@dr$pca@cell.embeddings)
+  
+  pdf(paste0("./plots/SS2/QC/PCA_plots", n, ".pdf"), useDingbats = F, height = 7.1, width = 7.1)
+  pca_plot = ggplot(plot_df, aes(x = PC1, y = PC2, colour = tissue_cell))+
+    geom_point(alpha = 0.77, pch = 19, size = 0.88)+
+    theme_classic()+
+    theme(aspect.ratio = 1)
+  print(pca_plot)
+  pca_plot = ggplot(plot_df, aes(x = PC2, y = PC3, colour = tissue_cell))+
+    geom_point(alpha = 0.77, pch = 19, size = 0.88)+
+    theme_classic()+
+    theme(aspect.ratio = 1)
+  print(pca_plot)
+  
+  # Elbow Plot
+  elbow_plot = PCElbowPlot(object = sr_list[[n]], num.pc = 50)
+  print(elbow_plot)
+  dev.off()
+}
+
+sr_list = lapply(sr_list, RunTSNE, dims.use = 1:20, seed.use = 1)
+sr_list_noqc = lapply(sr_list_noqc, RunTSNE, dims.use = 1:20, seed.use = 1)
+```
+
+
+
+Save
+
+```{r}
+save(sr_list, file = "saved_data/SS2/sr_list_SS2.RData")
+save(sr_list_noqc, file = "saved_data/SS2/sr_list_noqc_SS2.RData")
+```
+
+
+
+# Clustering
+Load data
+
+```{r}
+load("saved_data/SS2/sr_list_SS2.RData")
+```
+
+
+
+Subset data (dataset and cell type/tissue)
+
+```{r}
+sub_data_list = list()
+for(ds in names(sr_list)[c(1,2,4)]){
+  for(n in unique(sr_list[[ds]]@meta.data$tissue_cell)){
+    nn = paste0(ds, "_", n)
+    print(nn)
+    cells = rownames(sr_list[[ds]]@meta.data)[sr_list[[ds]]@meta.data$tissue_cell==n]
+    sub_data_list[[nn]] = Seurat::SubsetData(sr_list[[ds]], cells.use = cells)
+    sub_data_list[[nn]] = Seurat::FindVariableGenes(sub_data_list[[nn]],
+                                                    display.progress = F)
+    sub_data_list[[nn]] <- NormalizeData(object = sub_data_list[[nn]],
+                                         normalization.method = "LogNormalize",
+                                         scale.factor = 10000, display.progress = F)
+    sub_data_list[[nn]] <- Seurat::ScaleData(object = sub_data_list[[nn]], 
+                                             model.use = "negbinom", do.scale = F, 
+                                             do.center = T, use.umi = T)
+    sub_data_list[[nn]] = Seurat::RunPCA(sub_data_list[[nn]], pcs.compute = 30, 
+                                         do.print = F)
+  }
+}
+```
+
+
+
+PCA elbow plots and run tSNE
+
+```{r}
+pdf("./plots/SS2/clustering/elbow_plots_individual.pdf", useDingbats = F, 
+    height = 7.1, width = 7.1)
+for(n in names(sub_data_list)[-11]){
+  elbow_plot = PCElbowPlot(object = sub_data_list[[n]], num.pc = 30)+ggtitle(n)
+  print(elbow_plot)
+  sub_data_list[[n]] = Seurat::RunTSNE(sub_data_list[[n]], dims.use = 1:30, 
+                                       seed.use = 1, perplexity = 10)
+}
+dev.off()
+save(sub_data_list, file = "./saved_data/SS2/SS2_sub_data_list.RData")
+```
+
+
+
+Run clustering for each partition
+
+```{r}
+for(n in names(sub_data_list)){
+  print(n)
+  sub_data_list[[n]] <- Seurat::FindClusters(object = sub_data_list[[n]],
+                                             reduction.type = "pca",save.SNN = TRUE, 
+                                             dims.use = 1:30, print.output = 0,
+                                             resolution = seq(0.1, 1.2, 0.1))
+}
+save(sub_data_list, file = "./saved_data/SS2/SS2_sub_data_list.RData")
+```
+
+
+
+Look into clusters
+
+```{r}
+tsne_list_list = list()
+for(n in names(sub_data_list)){
+  tsne_list = list()
+  for(i in c(5:16)){
+    tsne_list[[colnames(sub_data_list[[n]]@meta.data)[i]]] = Seurat::TSNEPlot(sub_data_list[[n]], do.label = T, 
+                                                                      group.by = colnames(sub_data_list[[n]]@meta.data)[i], 
+                                                                      vector.friendly = T, label.size = 14, no.legend = T,
+                                                                      do.return = T, pt.size = 3)+
+      ggtitle(paste(n, colnames(sub_data_list[[n]]@meta.data)[i]))+
+      theme(aspect.ratio = 1)
+  }
+  tsne_list_list[[n]] = tsne_list
+}
+
+pdf("./plots/SS2/clustering/tSNE_plots.pdf", useDingbats = F, paper = "a4")
+for(n in names(tsne_list_list)){
+  tsne_list= tsne_list_list[[n]]
+  all_plots = cowplot::plot_grid(plotlist = tsne_list[1:4], ncol = 2, align = "hv")
+  print(all_plots)
+  all_plots = cowplot::plot_grid(plotlist = tsne_list[5:8], ncol = 2, align = "hv")
+  print(all_plots)
+  all_plots = cowplot::plot_grid(plotlist = tsne_list[9:12], ncol = 2, align = "hv")
+  print(all_plots)
+}
+dev.off()
+```
+
+
+
+# DE
+## Between sorted populations
+Load data and add extra info
+
+```{r}
+load("saved_data/SS2/sr_list_SS2.RData")
+
+for(n in names(sr_list)){
+  sr_list[[n]]@meta.data$is_nlt = c("LT", "NLT")[(grepl("skin", sr_list[[n]]@meta.data$tissue) | grepl("colon", sr_list[[n]]@meta.data$tissue))+1]
+}
+sr_list$human@meta.data$cell_type_full = sr_list$human@meta.data$cell.type
+sr_list$human@meta.data$cell.type = ifelse(grepl("Treg",
+                                           sr_list$human@meta.data$cell_type_full),
+                                           "Treg", "Tmem")
+
+save(sr_list, file = "saved_data/SS2/sr_list_SS2.RData")
+```
+
+
+
+DE NLT vs LT (USE 1% CELLS HERE)
+
+```{r}
+de_lt_nlt_ss2 = list()
+for(i in names(sr_list)){
+  sr_list[[i]] = SetIdent(sr_list[[i]], 
+                          ident.use = as.character(sr_list[[i]]@meta.data$is_nlt))
+  de_lt_nlt_ss2[[i]] = FindMarkers(sr_list[[i]], ident.1 = "NLT", ident.2 = "LT",
+                                   logfc.threshold = 0.25, min.pct = 0.01, # 1% CELLS
+                                   print.bar = T)
+  
+  gc()
+}
+de_lt_nlt_ss2[1:3] = lapply(de_lt_nlt_ss2[1:3], function(x) merge(gene_names, x,
+                                                                  by.x = 1, 
+                                                                  by.y = 0))
+save(de_lt_nlt_ss2, file = "plots/SS2/DE/de_lt_nlt_SS2.RData")
+```
+
+
+
+DE Treg vs Tmem (USE 1% CELLS HERE)
+
+```{r}
+de_treg_tmem_ss2 = list()
+for(i in names(sr_list)){
+  sr_list[[i]] = SetIdent(sr_list[[i]], ident.use = sr_list[[i]]@meta.data$cell.type)
+  de_treg_tmem_ss2[[i]] = FindMarkers(sr_list[[i]], print.bar = T,
+                                      ident.1 = "Treg", ident.2 = "Tmem",
+                                      logfc.threshold = 0.25, 
+                                      min.pct = 0.01) # 1% CELLS
+  
+  gc()
+}
+de_treg_tmem_ss2[1:3] = lapply(de_treg_tmem_ss2[1:3], function(x) merge(gene_names, x, by.x = 1, by.y = 0))
+save(de_treg_tmem_ss2, file = "plots/SS2/DE/de_treg_tmem_ss2.RData")
+```
+
+
+
+Second pass DE with all genes identified before
+
+```{r}
+load("plots/SS2/DE/de_lt_nlt_SS2.RData")
+load("plots/SS2/DE/de_treg_tmem_ss2.RData")
+
+de_lt_nlt_all_ss2 = list()
+de_treg_tmem_all_ss2 = list()
+for(n in names(sr_list)){
+  genes_use = union(as.character(de_lt_nlt_ss2[[n]]$V1),
+                    as.character(de_treg_tmem_ss2[[n]]$V1))
+
+  sr_list[[n]] = SetIdent(sr_list[[n]], ident.use = sr_list[[n]]@meta.data$cell.type)
+  de_treg_tmem_all_ss2[[n]] = FindMarkers(sr_list[[n]], ident.1 = "Treg", 
+                                          ident.2 = "Tmem", genes.use = genes_use,
+                                          logfc.threshold = 0, min.pct = 0, 
+                                          print.bar = T)
+  
+  sr_list[[n]] = SetIdent(sr_list[[n]], ident.use = sr_list[[n]]@meta.data$is_nlt)
+  de_lt_nlt_all_ss2[[n]] = FindMarkers(sr_list[[n]], ident.1 = "NLT", ident.2 = "LT",
+                                       genes.use = genes_use,
+                                       logfc.threshold = 0, min.pct = 0, 
+                                       print.bar = T)
+  gc()
+}
+
+de_treg_tmem_all_ss2[1:3] = lapply(de_treg_tmem_all_ss2[1:3], 
+                                   function(x) merge(gene_names, x, 
+                                                     by.x = 1, by.y = 0))
+save(de_treg_tmem_all_ss2, file = "plots/SS2/DE/de_treg_tmem_all_SS2.RData")
+
+de_lt_nlt_all_ss2[1:3] = lapply(de_lt_nlt_all_ss2[1:3],
+                                function(x) merge(gene_names, x, by.x = 1, by.y = 0))
+save(de_lt_nlt_all_ss2, file = "plots/SS2/DE/de_lt_nlt_all_SS2.RData")
+```
+
+
+
+DE colon vs skin (USE 1% CELLS HERE)
+
+```{r}
+# Merge data
+sr_list$mouse_skin@meta.data$nr.of.cells = factor(sr_list$mouse_skin@meta.data$nr.of.cells)
+colon_skin_data = MergeSeurat(sr_list$mouse_colon, sr_list$mouse_skin)
+colon_skin_data = SubsetData(colon_skin_data, 
+                             cells.use = rownames(colon_skin_data@meta.data)[colon_skin_data@meta.data$tissue %in% c("colon","skin")])
+
+# DE with All, Treg and Tmem
+de_colon_skin_ss2 = list()
+colon_skin_data = SetIdent(colon_skin_data, 
+                           ident.use = as.character(colon_skin_data@meta.data$tissue))
+de_colon_skin_ss2[["all"]] = FindMarkers(colon_skin_data, ident.1 = "colon", ident.2 = "skin",
+                                         logfc.threshold = 0.25, min.pct = 0.01, # 1% CELLS
+                                         print.bar = T)
+
+sub_data = SubsetData(colon_skin_data, 
+                      cells.use = rownames(colon_skin_data@meta.data)[colon_skin_data@meta.data$cell.type %in% c("Treg")])
+de_colon_skin_ss2[["Treg"]] = FindMarkers(sub_data, ident.1 = "colon", ident.2 = "skin",
+                                          logfc.threshold = 0.25, min.pct = 0.01, # 1% CELLS
+                                          print.bar = T)
+
+sub_data = SubsetData(colon_skin_data, 
+                      cells.use = rownames(colon_skin_data@meta.data)[colon_skin_data@meta.data$cell.type %in% c("Tmem")])
+de_colon_skin_ss2[["Tmem"]] = FindMarkers(sub_data, ident.1 = "colon", ident.2 = "skin",
+                                          logfc.threshold = 0.25, min.pct = 0.01, # 1% CELLS
+                                          print.bar = T)
+  
+de_colon_skin_ss2 = lapply(de_colon_skin_ss2, function(x) merge(gene_names, x,
+                                                                by.x = 1, by.y = 0))
+save(de_colon_skin_ss2, file = "plots/SS2/DE/de_colon_skin_ss2.RData")
+save(colon_skin_data, file = "saved_data/SS2/colon_skin_data.RData")
+```
+
+
+
+## Melanoma
+Load data
+
+```{r}
+load("saved_data/SS2/sr_list_SS2.RData")
+```
+
+
+
+Run Cyclone to get cycling cells
+
+```{r}
+mm.pairs <- readRDS(system.file("exdata", "mouse_cycle_markers.rds", package="scran"))
+assigned <- scran::cyclone(sr_list$mouse_mel@data, pairs = mm.pairs)
+
+sr_list$mouse_mel@meta.data$cellcycle = assigned$phases
+save(sr_list, file = "saved_data/SS2/sr_list_SS2.RData")
+```
+
+
+
+DE without cycling cells
+
+```{r}
+de_ss_mel_ss2 = list()
+for(tiss in c("spleen", "LN", "skin")){
+  sub_dat = Seurat::SubsetData(sr_list$mouse_mel, 
+                               cells.use = rownames(sr_list$mouse_mel@meta.data)[sr_list$mouse_mel@meta.data$cellcycle=="G1" &
+                                                                                   sr_list$mouse_mel@meta.data$tissue==tiss &
+                                                                                   sr_list$mouse_mel@meta.data$cell.type=="Treg"])
+  sub_dat = SetIdent(sub_dat, ident.use = as.character(sub_dat@meta.data$condition))
+  de_ss_mel_ss2[[tiss]] = FindMarkers(sub_dat, ident.1 = "Tumour", 
+                                      ident.2 = "Control",
+                                      logfc.threshold = 0.25, 
+                                      min.pct = 0.01, # 1% CELLS
+                                      print.bar = T)
+}
+de_ss_mel_ss2 = lapply(de_ss_mel_ss2, function(x) merge(gene_names, x,
+                                                        by.x = 1, by.y = 0))
+save(de_ss_mel_ss2, file = "plots/SS2/DE/de_ss_mel_ss2.RData")
+```
+
+
+
+# Pseudotime
+Load data
+
+```{r}
+load("saved_data/SS2/sr_list_SS2.RData")
+```
+
+
+
+## Treg Steady-state
+Subset data
+
+```{r}
+for(n in c("mouse_colon", "mouse_skin")){
+    cells = rownames(sr_list[[n]]@meta.data)[!grepl("Tmem",sr_list[[n]]@meta.data$tissue_cell) & !grepl("spleen", sr_list[[n]]@meta.data$tissue_cell)]
+  
+  sub_data = Seurat::SubsetData(sr_list[[n]], cells.use = cells)
+  sub_data <- NormalizeData(object = sub_data, 
+                            normalization.method = "LogNormalize", 
+                            scale.factor = 10000, display.progress = F)
+  sub_data = Seurat::FindVariableGenes(sub_data, display.progress = F, 
+                                       num.bin = 100, 
+                                       binning.method = "equal_frequency")
+  
+  exp_mat = t(as.matrix(sub_data@data[sub_data@var.genes,]))
+  save_mat = merge(sub_data@meta.data[cells,c("cell.type", "tissue")],
+                   as.matrix(exp_mat), by = 0)
+  rownames(save_mat) = save_mat[,1]
+  save_mat = save_mat[,-1]
+  colnames(save_mat)[1] = "cell_type"
+  write.csv(save_mat, file = paste0("./saved_data/SS2/Treg_", n, "_LN.csv"), 
+            row.names = T, quote = F, col.names = T)
+}
+```
+
+
+
+## Treg Melanoma
+Load genes
+
+```{r}
+load("plots/10X/DE/de_lt_nlt_all_10X.RData")
+mm.pairs <- readRDS(system.file("exdata", "mouse_cycle_markers.rds",
+                                package="scran"))
+
+genes_tissues = union(de_lt_nlt_all$colon_mLN_spleen$V1[abs(de_lt_nlt_all$colon_mLN_spleen$avg_logFC)>=0.25 & de_lt_nlt_all$colon_mLN_spleen$p_val_adj<=0.05],
+                    de_lt_nlt_all$skin_bLN_spleen$V1[abs(de_lt_nlt_all$skin_bLN_spleen$avg_logFC)>=0.25 & de_lt_nlt_all$skin_bLN_spleen$p_val_adj<=0.05])
+
+genes_cc = rbind(mm.pairs$G1, mm.pairs$S, mm.pairs$G2M)
+genes_cc = unique(c(genes_cc[,1], genes_cc[,2]))
+genes_tissues = genes_tissues[!genes_tissues %in% genes_cc]
+
+# for t0 comparisons
+gene_groups = list("Skin" = as.character(de_lt_nlt_all$skin_bLN_spleen$V1[de_lt_nlt_all$skin_bLN_spleen$p_val_adj<=0.01 & de_lt_nlt_all$skin_bLN_spleen$avg_logFC>=0.25]), 
+                   "LT" = as.character(de_lt_nlt_all$skin_bLN_spleen$V1[de_lt_nlt_all$skin_bLN_spleen$p_val_adj<=0.01 & de_lt_nlt_all$skin_bLN_spleen$avg_logFC<=(-0.25)]), 
+                   "Cell Cycle" = genes_cc)
+gene_groups$Skin = gene_groups$Skin[!gene_groups$Skin %in% gene_groups$`Cell Cycle`]
+gene_groups$LT = gene_groups$LT[!gene_groups$LT %in% gene_groups$`Cell Cycle`]
+gene_groups = reshape2::melt(gene_groups)
+
+write.csv(gene_groups, file = "plots/SS2/MRD_melanoma/gene_groups.csv", 
+          col.names = T, row.names = T, quote = F)
+
+# save melanoma metadata for velocyto
+write.csv(sr_list$mouse_mel@meta.data, file = "plots/SS2/MRD_melanoma/mouse_mel_metadata.csv", 
+          col.names = T, row.names = T, quote = F)
+```
+
+
+
+Subset data
+
+```{r}
+# MRD
+treg_bln_sk = data.frame(as.matrix(t(as.matrix(sr_list$mouse_mel@data[,sr_list$mouse_mel@meta.data$cell.type=="Treg" & sr_list$mouse_mel@meta.data$tissue!="spleen"]))))
+
+treg_bln_sk = merge(sr_list$mouse_mel@meta.data[,c("t_c_cond", "cellcycle")], 
+      treg_bln_sk, by = 0)
+rownames(treg_bln_sk) = treg_bln_sk[,1]
+treg_bln_sk = treg_bln_sk[,-1]
+
+write.csv(treg_bln_sk[,colnames(treg_bln_sk) %in% c("t_c_cond", "cellcycle",
+                                                    genes_tissues)],
+          file = "saved_data/SS2/Treg_mel_bLN_skin_tissue.csv", 
+          col.names = T, row.names = T, quote = F)
+write.csv(treg_bln_sk[,colnames(treg_bln_sk) %in% c("t_c_cond", "cellcycle",
+                                                   genes_cc),],
+          file = "saved_data/SS2/Treg_mel_bLN_skin_cc.csv", 
+          col.names = T, row.names = T, quote = F)
+write.csv(treg_bln_sk[,!colnames(treg_bln_sk) %in% c(genes_tissues, genes_cc),],
+          file = "saved_data/SS2/Treg_mel_bLN_skin_other.csv", 
+          col.names = T, row.names = T, quote = F)
+
+treg_sub_list = list()
+# Individual conditions for BGPLVM
+for(cond in c("Control", "Tumour")){
+  treg_sub = data.frame(as.matrix(t(sr_list$mouse_mel@data[,sr_list$mouse_mel@meta.data$cell.type=="Treg" & sr_list$mouse_mel@meta.data$tissue!="spleen" & sr_list$mouse_mel@meta.data$condition==cond])))
+  
+  treg_sub = merge(sr_list$mouse_mel@meta.data[,c("t_c_cond", "cellcycle")], 
+                   treg_sub, by = 0)
+  rownames(treg_sub) = treg_sub[,1]
+  treg_sub = treg_sub[,-1]
+  
+  write.csv(treg_sub,
+            file = paste0("saved_data/SS2/Treg_mel_bLN_skin_", cond, ".csv"), 
+            col.names = T, row.names = T, quote = F)
+  treg_sub_list[[cond]] = treg_sub
+}
+```
+
+
+
+Load MRD results (see MRD_melanoma notebook), format data
+
+```{r}
+mrd_lvs = read.csv("plots/SS2/MRD_melanoma/latent_variables_MRD_LNskinTreg.csv",
+                   header = T, row.names = 1)
+mrd_ard = read.csv("plots/SS2/MRD_melanoma/ARD_MRD_LNskinTreg.csv",
+                   header = T, row.names = 1)
+
+bgplvm_lv_ind = list("Control" = read.csv("plots/SS2/MRD_melanoma/latent_variables_Treg_mel_bLN_skin_Control.csv", header = T, row.names = 1), 
+                   "Tumour" = read.csv("plots/SS2/MRD_melanoma/latent_variables_Treg_mel_bLN_skin_Tumour.csv", header = T, row.names = 1))
+bgplvm_ard_ind = list("Control" = read.csv("plots/SS2/MRD_melanoma/ARD_Treg_mel_bLN_skin_Control.csv", header = T, row.names = 1), 
+                      "Tumour" = read.csv("plots/SS2/MRD_melanoma/ARD_Treg_mel_bLN_skin_Tumour.csv", header = T, row.names = 1))
+
+# get each condition with same expressed genes
+genes = intersect(colnames(treg_sub_list$Control[,-c(1,2)])[colSums(treg_sub_list$Control[,-c(1,2)]>0)>7], colnames(treg_sub_list$Tumour[,-c(1,2)])[colSums(treg_sub_list$Tumour[,-c(1,2)]>0)>7])
+treg_sw_list = lapply(treg_sub_list, function(x) t(x[,genes]))
+```
+
+
+
+Run switchDE for each condition
+
+```{r}
+switch_de_cond = list()
+for(cond in c("Control", "Tumour")){
+  for(lv in c("LV5", "LV9", "LV4", "LV10")){
+    cells = colnames(treg_sw_list[[cond]])
+    pt = if(lv %in% c("LV9", "LV4", "LV5")) mrd_lvs[cells, lv]*-1 else mrd_lvs[cells, lv]
+    switch_de_cond[[paste0(cond, "_", lv)]] = switchde(treg_sw_list[[cond]][,cells], pt)
+  }
+}
+
+switch_de_cond = lapply(switch_de_cond, function(x) merge(gene_names, x, by = 1))
+save(switch_de_cond, file = "plots/SS2/MRD_melanoma/switch_de_cond.RData")
+```
+
+
+
+Look at genes from both conditions
+
+```{r}
+load("plots/SS2/MRD_melanoma/switch_de_cond.RData")
+switch_lv9 = merge(switch_de_cond$Control_LV9[,c(1,2,4:7)],
+                   switch_de_cond$Tumour_LV9[,c(1,4:7)], by = 1)
+switch_lv9$inInterval = ifelse(switch_lv9$t0.x<=max(mrd_lvs$LV9) &
+                                 switch_lv9$t0.x>=min(mrd_lvs$LV9),
+                               ifelse(switch_lv9$t0.y<=max(mrd_lvs$LV9) &
+                                        switch_lv9$t0.y>=min(mrd_lvs$LV9), 
+                                      "Both", "Control"),
+                               ifelse(switch_lv9$t0.y<=max(mrd_lvs$LV9) &
+                                        switch_lv9$t0.y>=min(mrd_lvs$LV9), 
+                                      "Tumour", "Neither"))
+switch_lv9 = merge(gene_groups, switch_lv9, by = 1, all.y = T)
+switch_lv9$L1[is.na(switch_lv9$L1)] = "Other"
+
+switch_lv9$isSig = switch_lv9$qval.x<=0.05 & switch_lv9$qval.y<=0.05 &
+  ((switch_lv9$k.x<0 & switch_lv9$k.y<0) |
+     (switch_lv9$k.x>0 & switch_lv9$k.y>0))
+colnames(switch_lv9) = c("ens_g", "Group", "gene", 
+                        "qval_Control", "mu0_Control", "k_Control", "t0_Control",
+                        "qval_Tumour", "mu0_Tumour", "k_Tumour", "t0_Tumour",
+                        "inInterval", "isSig")
+switch_lv9$t0_diff = switch_lv9$t0_Control-switch_lv9$t0_Tumour
+
+save(switch_lv9, file = "plots/SS2/MRD_melanoma/switch_lv9_results.RData")
+
+plot_df = switch_lv9[switch_lv9$inInterval=="Both" & switch_lv9$isSig,]
+
+cor(switch_lv9$t0_Control[switch_lv9$isSig], 
+    switch_lv9$t0_Tumour[switch_lv9$isSig], method = "sp")
+cor(plot_df$t0_Control, plot_df$t0_Tumour, method = "sp")
+
+cor(plot_df[plot_df$Group=="Skin", "t0_Control"], plot_df[plot_df$Group=="Skin", "t0_Tumour"], method = "sp")
+cor(plot_df[plot_df$Group=="Other", "t0_Control"], plot_df[plot_df$Group=="Other", "t0_Tumour"], method = "sp")
+cor(plot_df[plot_df$Group=="LT", "t0_Control"], plot_df[plot_df$Group=="LT", "t0_Tumour"], method = "sp")
+cor(plot_df[plot_df$Group=="Cell Cycle", "t0_Control"], plot_df[plot_df$Group=="Cell Cycle", "t0_Tumour"], method = "sp")
+
+ggplot(plot_df, aes(x = Group, y = t0_diff))+
+  geom_point(position = position_jitter(width = 0.1))+
+  stat_summary(colour = "red")+
+  geom_hline(yintercept = c(0.3157757, 0.5013434), linetype = "dashed")+
+  coord_flip()+
+  theme_classic()+
+  theme(aspect.ratio = 1)
+
+plot(xxx$t0_Control, xxx$t0_Tumour, col = as.numeric(as.factor(xxx$Group)))
+```
+
+
+
+# Human
+Load data
+
+```{r}
+load("saved_data/SS2/sr_list_SS2.RData")
+
+gene_names_human = read.csv("saved_data/gene_names_human_GRCh38_93.csv", 
+                            header = T)
+```
+
+
+
+Split human into colon + blood and skin + blood
+
+```{r}
+human_list = list("colon" = SubsetData(sr_list$human, 
+                                       cells.use = rownames(sr_list$human@meta.data)[sr_list$human@meta.data$tissue!="skin"]),
+                  "skin" = SubsetData(sr_list$human, 
+                                      cells.use = rownames(sr_list$human@meta.data)[sr_list$human@meta.data$tissue!="colon"]))
+```
+
+
+
+Regress out individual for skin data
+
+```{r}
+human_list$skin <- NormalizeData(human_list$skin, 
+                                 normalization.method = "LogNormalize",
+                                 scale.factor = 10000, display.progress = F)
+human_list$skin <- ScaleData(human_list$skin, model.use = "negbinom", 
+                             do.center = T, do.scale = F, use.umi = T,
+                             vars.to.regress = "individual")
+human_list$skin = RunPCA(human_list$skin, 
+                         pc.genes = rownames(human_list$skin@data), 
+                         pcs.compute = 50, do.print = FALSE)
+human_list$skin = RunTSNE(human_list$skin, dims.use = 1:12, seed.use = 1)
+
+save(human_list, file = "saved_data/SS2/human_list.RData")
+```
+
+
+
+## DE
+DE Blood vs NLT (all cell types)
+
+```{r}
+human_de_all = list()
+for(i in names(human_list)){
+  human_list[[i]] = SetIdent(human_list[[i]], 
+                             ident.use = as.character(human_list[[i]]@meta.data$tissue))
+  human_de_all[[i]] = FindMarkers(human_list[[i]], ident.1 = i, ident.2 = "blood",
+                                  logfc.threshold = 0.25, min.pct = 0.01,
+                                  print.bar = T)
+  
+  gc()
+}
+human_de_all = lapply(human_de_all, 
+                      function(x) merge(gene_names_human, 
+                                        x, by.x = 1, by.y = 0))
+save(human_de_all, file = "plots/SS2/DE/human_de_all.RData")
+```
+
+
+
+DE Blood vs NLT (by cell types)
+
+```{r}
+human_de_ct = list()
+for(i in names(human_list)){
+  for(ct in c("Treg", "Tmem")){
+    cells = if(ct=="Treg"){
+      human_list[[i]]@meta.data$cell.type==ct
+    } else{ human_list[[i]]@meta.data$cell.type!=ct}
+    sub_data = SubsetData(human_list[[i]], rownames(human_list[[i]]@meta.data)[cells])
+    sub_data = SetIdent(sub_data, 
+                        ident.use = as.character(sub_data@meta.data$tissue))
+    human_de_ct[[paste0(i, "_", ct)]] = FindMarkers(sub_data, ident.1 = i, 
+                                                    ident.2 = "blood",
+                                                    logfc.threshold = 0.25,
+                                                    min.pct = 0.01, print.bar = T)
+    gc()
+  }
+}
+human_de_ct = lapply(human_de_ct, function(x) merge(gene_names_human,
+                                                    x, by.x = 1, by.y = 0))
+save(human_de_ct, file = "plots/SS2/DE/human_de_ct.RData")
+```
+
+
+
+Markers each cell type by tissue/all tissues
+
+```{r}
+human_de_ct_full = list()
+for(i in names(human_list)){
+  for(tiss in unique(human_list[[i]]@meta.data$tissue)){
+    cells = human_list[[i]]@meta.data$tissue==tiss
+    sub_data = SubsetData(human_list[[i]], rownames(human_list[[i]]@meta.data)[cells])
+    sub_data = SetIdent(sub_data, 
+                        ident.use = as.character(sub_data@meta.data$cell.type))
+    human_de_ct_full[[paste0(i, "_", tiss)]] = FindAllMarkers(sub_data, 
+                                                              logfc.threshold = 0.25,
+                                                              return.thresh = 0.05,
+                                                              min.pct = 0.01, 
+                                                              print.bar = T)
+  }
+}
+
+sr_list$human = SetIdent(sr_list$human,
+                         ident.use = as.character(sr_list$human@meta.data$cell.type))
+human_de_ct_full[["all"]] = FindAllMarkers(sr_list$human, logfc.threshold = 0.25,
+                                           return.thresh = 0.05,
+                                           min.pct = 0.01, print.bar = T)
+
+human_de_ct_full = lapply(human_de_ct_full, function(x) merge(gene_names_human,
+                                                              x, by.x = 1, by.y = 0))
+save(human_de_ct_full, file = "plots/SS2/DE/human_de_ct_full.RData")
+```
+
+
+
+Tissue markers by cell type
+
+```{r}
+human_de_tiss_full = list()
+for(i in names(human_list)){
+  for(ct in unique(human_list[[i]]@meta.data$cell.type)){
+    cells = human_list[[i]]@meta.data$cell.type==ct
+    sub_data = SubsetData(human_list[[i]], rownames(human_list[[i]]@meta.data)[cells])
+    sub_data = SetIdent(sub_data, 
+                        ident.use = as.character(sub_data@meta.data$tissue))
+    human_de_tiss_full[[paste0(i, "_", ct)]] = FindAllMarkers(sub_data, 
+                                                              logfc.threshold = 0.25,
+                                                              return.thresh = 0.05,
+                                                              min.pct = 0.01, 
+                                                              print.bar = T)
+    
+    cells = sr_list$human@meta.data$cell.type==ct
+    sub_data = SubsetData(sr_list$human, rownames(sr_list$human@meta.data)[cells])
+    sub_data = SetIdent(sub_data, ident.use = as.character(sub_data@meta.data$tissue))
+    human_de_tiss_full[[paste0("all", ct)]] = FindAllMarkers(sub_data, 
+                                                             logfc.threshold = 0.25,
+                                                             return.thresh = 0.05, 
+                                                             min.pct = 0.01, 
+                                                             print.bar = T)
+  }
+}
+
+sr_list$human = SetIdent(sr_list$human,
+                         ident.use = as.character(sr_list$human@meta.data$tissue))
+human_de_tiss_full[["all"]] = FindAllMarkers(sr_list$human, logfc.threshold = 0.25,
+                                             return.thresh = 0.05, min.pct = 0.01,
+                                             print.bar = T)
+
+human_de_tiss_full = lapply(human_de_tiss_full, function(x) merge(gene_names_human,
+                                                                  x, by.x = 1, by.y = 0))
+save(human_de_tiss_full, file = "plots/SS2/DE/human_de_tiss_full.RData")
+```
+
+
+
+Pairwise DE cell type by tissue/all tissues
+
+```{r}
+human_de_ct_pair = list()
+for(i in names(human_list)){
+  for(tiss in unique(human_list[[i]]@meta.data$tissue)){
+    for(ct in unique(human_list[[i]]@meta.data$cell.type)){
+      cells = human_list[[i]]@meta.data$cell.type!=ct & 
+        human_list[[i]]@meta.data$tissue==tiss
+      ct_de = unique(human_list[[i]]@meta.data$cell.type)[unique(human_list[[i]]@meta.data$cell.type)!=ct]
+      id = paste(ct_de, collapse = ".vs.")
+      sub_data = SubsetData(human_list[[i]], rownames(human_list[[i]]@meta.data)[cells])
+      sub_data = SetIdent(sub_data, 
+                          ident.use = as.character(sub_data@meta.data$cell.type))
+      human_de_ct_pair[[paste0(i, "_", id)]] = FindMarkers(sub_data, ident.1 = ct_de[1], ident.2 = ct_de[2],
+                                                           logfc.threshold = 0.25, min.pct = 0.01, print.bar = T)
+    }
+  }
+}
+
+for(ct in unique(sr_list$human@meta.data$cell.type)){
+  cells = sr_list$human@meta.data$cell.type!=ct
+  ct_de = unique(sr_list$human@meta.data$cell.type)[unique(sr_list$human@meta.data$cell.type)!=ct]
+  id = paste(ct_de, collapse = ".vs.")
+  sub_data = SubsetData(sr_list$human, rownames(sr_list$human@meta.data)[cells])
+  sr_list$human = SetIdent(sr_list$human,
+                           ident.use = as.character(sr_list$human@meta.data$cell.type))
+  human_de_ct_pair[[paste0("all_", id)]] = FindMarkers(sr_list$human, ident.1 = ct_de[1], ident.2 = ct_de[2],
+                                                       logfc.threshold = 0.25, min.pct = 0.01, print.bar = T)
+}
+
+human_de_ct_pair = lapply(human_de_ct_pair, function(x) merge(gene_names_human,
+                                                              x, by.x = 1, by.y = 0))
+save(human_de_ct_pair, file = "plots/SS2/DE/human_de_ct_pair.RData")
+```
+
+
+
+## Mouse comparisons
+Load evolutionary data
+
+```{r}
+load("./saved_data/bm.query_human_allevo.RData")
+load("./saved_data/bm.query_mouse_allevo.RData")
+load("./saved_data/paralog_list_2.RData")
+```
+
+
+
+Run mouse SS2 DE with spleen only
+
+```{r}
+mouse_de_ct = list()
+for(i in names(sr_list)[1:2]){
+  nlt = strsplit(i, "_")[[1]][2]
+  for(ct in c("Treg", "Tmem")){
+    sub_data = SubsetData(sr_list[[i]], rownames(sr_list[[i]]@meta.data)[sr_list[[i]]@meta.data$cell.type==ct])
+    sub_data = SetIdent(sub_data, 
+                        ident.use = as.character(sub_data@meta.data$tissue))
+    mouse_de_ct[[paste0(i, "_", ct)]] = FindMarkers(sub_data, ident.1 = nlt,
+                                                    ident.2 = "spleen",
+                                                    logfc.threshold = 0.25,
+                                                    min.pct = 0.01, print.bar = T)
+    gc()
+  }
+}
+mouse_de_ct = lapply(mouse_de_ct, function(x) merge(gene_names, x, 
+                                                    by.x = 1, by.y = 0))
+save(mouse_de_ct, file = "plots/SS2/DE/mouse_de_ct.RData")
+```
+
+
+
+Get union DE genes with 1 to 1 orthologues (mouse and human, colon and skin)
+
+```{r}
+# Mouse DE
+load("plots/SS2/DE/mouse_de_ct.RData")
+mouse_de_ct = lapply(mouse_de_ct, function(x) merge(x, bm.query_mouse_allevo_list[[5]][,c(1,5,2)], by = 1))
+
+genes_mouse_for_mouse = unique(c(as.character(mouse_de_ct$mouse_colon_Treg$V1)[mouse_de_ct$mouse_colon_Treg$hsapiens_homolog_orthology_type=="ortholog_one2one"], as.character(mouse_de_ct$mouse_skin_Treg$V1)[mouse_de_ct$mouse_skin_Treg$hsapiens_homolog_orthology_type=="ortholog_one2one"]))
+genes_mouse_for_human = as.character(unique(c(mouse_de_ct$mouse_colon_Treg$hsapiens_homolog_ensembl_gene[mouse_de_ct$mouse_colon_Treg$hsapiens_homolog_orthology_type=="ortholog_one2one"], mouse_de_ct$mouse_skin_Treg$hsapiens_homolog_ensembl_gene[mouse_de_ct$mouse_skin_Treg$hsapiens_homolog_orthology_type=="ortholog_one2one"])))
+
+
+# Human DE
+load("plots/SS2/DE/human_de_ct.RData")
+human_de_ct = lapply(human_de_ct, function(x) merge(x, bm.query_human_allevo_list[[5]][,c(1,5,2)], by = 1))
+
+genes_human_for_human = unique(c(as.character(human_de_ct$colon_Treg$Gene.stable.ID)[human_de_ct$colon_Treg$mmusculus_homolog_orthology_type=="ortholog_one2one"], as.character(human_de_ct$skin_Treg$Gene.stable.ID)[human_de_ct$skin_Treg$mmusculus_homolog_orthology_type=="ortholog_one2one"]))
+genes_human_for_mouse = unique(c(as.character(human_de_ct$colon_Treg$mmusculus_homolog_ensembl_gene)[human_de_ct$colon_Treg$mmusculus_homolog_orthology_type=="ortholog_one2one"], as.character(human_de_ct$skin_Treg$mmusculus_homolog_ensembl_gene)[human_de_ct$skin_Treg$mmusculus_homolog_orthology_type=="ortholog_one2one"]))
+
+
+# Set common genes
+genes_mouse = unique(c(genes_mouse_for_mouse, genes_human_for_mouse))
+genes_human = bm.query_mouse_allevo_list[[5]][match(genes_mouse,bm.query_mouse_allevo_list[[5]]$ensembl_gene_id), "hsapiens_homolog_ensembl_gene"]
+genes_human_alt = unique(c(genes_human_for_human, genes_mouse_for_human))
+sum(!genes_human_alt %in% genes_human) # confirm that they match
+
+mouse_colon_genes = sr_list$mouse_colon@data[,sr_list$mouse_colon@meta.data$cell.type=="Treg" & sr_list$mouse_colon@meta.data$tissue!="LN"]
+mouse_colon_genes = rownames(mouse_colon_genes)[rowSums(mouse_colon_genes)>0]
+mouse_skin_genes = sr_list$mouse_skin@data[,sr_list$mouse_skin@meta.data$cell.type=="Treg" & sr_list$mouse_skin@meta.data$tissue!="LN"]
+mouse_skin_genes = rownames(mouse_skin_genes)[rowSums(mouse_skin_genes)>0]
+
+human_colon_genes = human_list$colon@data[,human_list$colon@meta.data$cell.type=="Treg"]
+human_colon_genes = rownames(human_colon_genes)[rowSums(human_colon_genes)>0]
+human_skin_genes = human_list$skin@data[,human_list$skin@meta.data$cell.type=="Treg"]
+human_skin_genes = rownames(human_skin_genes)[rowSums(human_skin_genes)>0]
+
+genes_mouse_exp = genes_mouse[genes_mouse %in% mouse_colon_genes &
+                                genes_mouse %in% mouse_skin_genes &
+                                genes_human %in% human_colon_genes &
+                                genes_human %in% human_skin_genes]
+genes_human_exp = genes_human[genes_mouse %in% mouse_colon_genes &
+                                genes_mouse %in% mouse_skin_genes &
+                                genes_human %in% human_colon_genes &
+                                genes_human %in% human_skin_genes]
+```
+
+
+
+DE with same genes 
+
+```{r}
+# Mouse all
+mouse_de_ct_all = list()
+for(i in names(sr_list)[1:2]){
+  nlt = strsplit(i, "_")[[1]][2]
+  for(ct in c("Treg")){
+    sub_data = SubsetData(sr_list[[i]], rownames(sr_list[[i]]@meta.data)[sr_list[[i]]@meta.data$cell.type==ct])
+    sub_data = SetIdent(sub_data, 
+                        ident.use = as.character(sub_data@meta.data$tissue))
+    mouse_de_ct_all[[paste0(i, "_", ct)]] = FindMarkers(sub_data, ident.1 = nlt,
+                                                    ident.2 = "spleen",
+                                                    genes.use = genes_mouse_exp,
+                                                    logfc.threshold = 0, 
+                                                    min.pct = 0,
+                                                    print.bar = T)
+    gc()
+  }
+}
+mouse_de_ct_all = lapply(mouse_de_ct_all, function(x) merge(gene_names, x, 
+                                                    by.x = 1, by.y = 0, all.y = T))
+
+# add corresponding human ortholog
+mouse_de_ct_all = lapply(mouse_de_ct_all, 
+                         function(x) merge(bm.query_mouse_allevo_list[[5]], 
+                                           x, by = 1))
+
+save(mouse_de_ct_all, file = "plots/SS2/DE/mouse_de_ct_all.RData")
+
+
+# Human all
+human_de_ct_all = list()
+for(i in names(human_list)){
+  for(ct in c("Treg")){
+    sub_data = SubsetData(human_list[[i]], rownames(human_list[[i]]@meta.data)[human_list[[i]]@meta.data$cell.type==ct])
+    sub_data = SetIdent(sub_data, 
+                        ident.use = as.character(sub_data@meta.data$tissue))
+    human_de_ct_all[[paste0(i, "_", ct)]] = FindMarkers(sub_data, ident.1 = i, 
+                                                     ident.2 = "blood", 
+                                                     genes.use = genes_human_exp,
+                                                     logfc.threshold = 0, 
+                                                     min.pct = 0, 
+                                                     print.bar = T)
+    gc()
+  }
+}
+human_de_ct_all = lapply(human_de_ct_all, function(x) merge(gene_names_human, x,
+                                                            by.x = 1, by.y = 0,
+                                                            all.y = T))
+save(human_de_ct_all, file = "plots/SS2/DE/human_de_ct_all.RData")
+```
+
+
+
+Look at paralog differential usage
+
+```{r, fig.height=20}
+load("plots/SS2/DE/mouse_de_ct_all.RData")
+load("plots/SS2/DE/human_de_ct_all.RData")
+human_markers = list("colon" = as.character(human_de_ct_all$colon_Treg$Gene.stable.ID[human_de_ct_all$colon_Treg$p_val_adj<=.05 & human_de_ct_all$colon_Treg$avg_logFC>=0.25]),
+                     "skin" = as.character(human_de_ct_all$skin_Treg$Gene.stable.ID[human_de_ct_all$skin_Treg$p_val_adj<=.05 & human_de_ct_all$skin_Treg$avg_logFC>=0.25]),
+                     "blood" = unique(c(as.character(human_de_ct_all$colon_Treg$Gene.stable.ID[human_de_ct_all$colon_Treg$p_val_adj<=.05 & human_de_ct_all$colon_Treg$avg_logFC<=(-0.25)]),as.character(human_de_ct_all$skin_Treg$Gene.stable.ID[human_de_ct_all$skin_Treg$p_val_adj<=.05 & human_de_ct_all$skin_Treg$avg_logFC<=(-0.25)]))))
+
+mouse_markers = list("colon" = as.character(mouse_de_ct_all$mouse_colon_Treg$ensembl_gene_id[mouse_de_ct_all$mouse_colon_Treg$p_val_adj<=.05 & mouse_de_ct_all$mouse_colon_Treg$avg_logFC>=0.25]),
+                     "skin" = as.character(mouse_de_ct_all$mouse_skin_Treg$ensembl_gene_id[mouse_de_ct_all$mouse_skin_Treg$p_val_adj<=.05 & mouse_de_ct_all$mouse_skin_Treg$avg_logFC>=0.25]),
+                     "blood" = unique(c(as.character(mouse_de_ct_all$mouse_colon_Treg$ensembl_gene_id[mouse_de_ct_all$mouse_colon_Treg$p_val_adj<=.05 & mouse_de_ct_all$mouse_colon_Treg$avg_logFC<=(-0.25)]),as.character(mouse_de_ct_all$mouse_skin_Treg$ensembl_gene_id[mouse_de_ct_all$mouse_skin_Treg$p_val_adj<=.05 & mouse_de_ct_all$mouse_skin_Treg$avg_logFC<=(-0.25)]))))
+
+# Find genes not DE in the other species but whose paralogs are
+mouse_to_human_par = list()
+for(n in names(mouse_markers)){
+  par_tab = paralog_lists$human[paralog_lists$human$mmusculus_homolog_orthology_type=="ortholog_one2one" & paralog_lists$human$ensembl_gene_id!=paralog_lists$human$hsapiens_paralog_ensembl_gene,]
+  mm_human = par_tab[match(mouse_markers[[n]],par_tab$mmusculus_homolog_ensembl_gene),"ensembl_gene_id"]
+  marks = mouse_markers[[n]][!mm_human %in% human_markers[[n]]]
+  
+  mm_human_par = unique(par_tab[par_tab$mmusculus_homolog_ensembl_gene %in% marks,c(1,4)])
+  
+  mm_human_par$isDE = mm_human_par$hsapiens_paralog_ensembl_gene%in%unlist(human_markers)
+  mouse_to_human_par[[n]] = c(mm_human_par$ensembl_gene_id[mm_human_par$isDE],
+                              mm_human_par$hsapiens_paralog_ensembl_gene[mm_human_par$isDE])
+}
+
+human_to_mouse_par = list()
+for(n in names(human_markers)){
+  par_tab = paralog_lists$mouse[paralog_lists$mouse$mmusculus_homolog_orthology_type=="ortholog_one2one" & paralog_lists$mouse$mmusculus_homolog_ensembl_gene!=paralog_lists$mouse$mmusculus_paralog_ensembl_gene,]
+  hm_mouse = par_tab[match(human_markers[[n]],par_tab$ensembl_gene_id),
+                     "mmusculus_homolog_ensembl_gene"]
+  marks = human_markers[[n]][!hm_mouse %in% mouse_markers[[n]]]
+  
+  hm_mouse_par = unique(par_tab[par_tab$ensembl_gene_id %in% marks,c(3,4)])
+  
+  hm_mouse_par$isDE = hm_mouse_par$mmusculus_paralog_ensembl_gene%in%unlist(mouse_markers)
+  human_to_mouse_par[[n]] = c(hm_mouse_par$mmusculus_homolog_ensembl_gene[hm_mouse_par$isDE],
+                              hm_mouse_par$mmusculus_paralog_ensembl_gene[hm_mouse_par$isDE])
+}
+
+# Make table genes by species/tissue (true or false)
+gene_is_de = data.frame("genes_human" = unique(c(unlist(mouse_to_human_par),paralog_lists$mouse$ensembl_gene_id[paralog_lists$mouse$mmusculus_homolog_ensembl_gene %in% unlist(human_to_mouse_par)])), stringsAsFactors = F)
+gene_is_de$genes_mouse = paralog_lists$mouse$mmusculus_homolog_ensembl_gene[match(gene_is_de$genes_human, paralog_lists$mouse$ensembl_gene_id)]
+gene_is_de = cbind(gene_is_de, matrix(FALSE, nrow(gene_is_de), 6))
+colnames(gene_is_de)[3:8] = c("human_colon", "human_skin", "human_blood",
+                              "mouse_colon", "mouse_skin", "mouse_spleen")
+for(n in colnames(gene_is_de)[3:8]){
+  if(grepl("human", n)){
+    gene_is_de[,n] = gene_is_de$genes_human %in% human_markers[[strsplit(n, "_")[[1]][2]]]
+  } else{
+    sublist = if(n=="mouse_spleen") "blood" else strsplit(n, "_")[[1]][2]
+    gene_is_de[,n] = gene_is_de$genes_mouse %in% mouse_markers[[sublist]]
+  }
+}
+
+gene_is_de = merge(gene_names_human, gene_is_de, by = 1)
+
+# add a number for each paralog group
+gene_is_de$group_h = 0
+gene_is_de$group_m = 0
+group_par = 1
+skip = c()
+for(g in gene_is_de$Gene.stable.ID){
+  if(!g %in% skip){
+    gene_is_de$group_h[gene_is_de$Gene.stable.ID %in% paralog_lists$human[paralog_lists$human$ensembl_gene_id==g, "hsapiens_paralog_ensembl_gene"]] = group_par
+    group_par = group_par + 1
+    skip = c(skip, paralog_lists$human[paralog_lists$human$ensembl_gene_id==g, "hsapiens_paralog_ensembl_gene"])
+  }
+}
+group_par = 1
+skip = c()
+for(g in gene_is_de$genes_mouse){
+  if(!g %in% skip){
+    gene_is_de$group_m[gene_is_de$genes_mouse %in% paralog_lists$mouse[paralog_lists$mouse$mmusculus_homolog_ensembl_gene==g, "mmusculus_paralog_ensembl_gene"]] = group_par
+    group_par = group_par + 1
+    skip = c(skip, paralog_lists$mouse[paralog_lists$mouse$mmusculus_homolog_ensembl_gene==g, "mmusculus_paralog_ensembl_gene"])
+  }
+}
+
+# get mean expression of each tissue Treg
+gene_is_de$mouse_colon_exp = rowMeans(sr_list$mouse_colon@data[gene_is_de$genes_mouse,sr_list$mouse_colon@meta.data$tissue_cell=="colon.Treg"])
+gene_is_de$mouse_skin_exp = rowMeans(sr_list$mouse_skin@data[gene_is_de$genes_mouse,sr_list$mouse_skin@meta.data$tissue_cell=="skin.Treg"])
+gene_is_de$mouse_spleen_exp =rowMeans(cbind(sr_list$mouse_colon@data[gene_is_de$genes_mouse,sr_list$mouse_colon@meta.data$tissue_cell=="spleen.Treg"],
+               sr_list$mouse_skin@data[gene_is_de$genes_mouse,sr_list$mouse_skin@meta.data$tissue_cell=="spleen.Treg"]))
+
+gene_is_de$human_colon_exp = rowMeans(human_list$colon@data[gene_is_de$Gene.stable.ID,human_list$colon@meta.data$tissue_cell=="colon.Treg"])
+gene_is_de$human_skin_exp = rowMeans(human_list$skin@data[gene_is_de$Gene.stable.ID,human_list$skin@meta.data$tissue_cell=="skin.Treg"])
+gene_is_de$human_blood_exp =rowMeans(human_list$colon@data[gene_is_de$Gene.stable.ID,human_list$colon@meta.data$tissue_cell=="blood.Treg"])
+
+save(gene_is_de, file = "plots/SS2/human/paralog_table.RData")
+write.csv(gene_is_de, file = "plots/SS2/human/differential_paralog_table.csv", 
+          col.names = T, row.names = T, quote = F)
+```
+
+
+
+# Look into QC cells
+Load data
+
+```{r}
+load("saved_data/SS2/sr_list_noqc_SS2.RData")
+```
+
+
+
+Look into cells removed because of TCR
+
+```{r}
+for(n in names(sr_list_noqc)){
+  print(n)
+print(table(sr_list_noqc[[n]]@meta.data$tissue_cell[sr_list_noqc[[n]]@meta.data$tcr_out=="Yes"],
+      sr_list_noqc[[n]]@meta.data$clonotypes[sr_list_noqc[[n]]@meta.data$tcr_out=="Yes"]))
+}
+```
+
+
+
+DE of Treg with and without TCR
+
+```{r}
+# colon
+cells_c = rownames(sr_list_noqc$mouse_colon@meta.data)[sr_list_noqc$mouse_colon@meta.data$tissue_cell=="colon.Treg" & sr_list_noqc$mouse_colon@meta.data$qc_out=="No"]
+colon_subset = SubsetData(sr_list_noqc$mouse_colon, cells.use = cells_c)
+colon_subset = SetIdent(colon_subset, ident.use = colon_subset@meta.data$tcr_out)
+markers_tcr_colon_treg = FindMarkers(colon_subset, ident.1 = "Yes", ident.2 = "No",
+                                     min.pct = 0.01)
+markers_tcr_colon_treg = merge(markers_tcr_colon_treg, gene_names, by.x = 0, by.y = 1)
+
+# skin
+cells_c = rownames(sr_list_noqc$mouse_skin@meta.data)[sr_list_noqc$mouse_skin@meta.data$tissue_cell=="skin.Treg" & sr_list_noqc$mouse_skin@meta.data$qc_out=="No"]
+skin_subset = SubsetData(sr_list_noqc$mouse_skin, cells.use = cells_c)
+skin_subset = SetIdent(skin_subset, ident.use = skin_subset@meta.data$tcr_out)
+markers_tcr_skin_treg = FindMarkers(skin_subset, ident.1 = "Yes", ident.2 = "No",
+                                     min.pct = 0.01)
+markers_tcr_skin_treg = merge(markers_tcr_skin_treg, gene_names, by.x = 0, by.y = 1)
+
+# save data to then plot figures
+subset_list = list(colon = colon_subset, skin = skin_subset)
+sub_markers_list = list(colon = markers_tcr_colon_treg, skin = markers_tcr_skin_treg)
+save(subset_list, sub_markers_list,
+     file = "plots/SS2/QC/QC_TCR.RData")
+```
+
+
+
